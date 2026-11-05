@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FileHunt - Universal Video & Audio Downloader</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <a href="index.html" class="brand">
+      <div class="brand-icon">FH</div>
+      <div class="g-wordmark">
+        <span>F</span><span>i</span><span>l</span><span>e</span><span>H</span><span>u</span><span>n</span><span>t</span>
+      </div>
+    </a>
+    <nav class="nav-links">
+      <a href="service.html" class="nav-btn">Supported Sites (1800+) &#9776;</a>
+    </nav>
+  </header>
+
+  <!-- Google-Inspired Hero Omnibox Section -->
+  <section class="hero-box">
+    <div id="activeServiceBadge" class="service-pill-badge" style="display: none;"></div>
+    <div class="hero-logo-large g-wordmark">
+      <span>F</span><span>i</span><span>l</span><span>e</span><span>H</span><span>u</span><span>n</span><span>t</span>
+    </div>
+    <h1 id="heroHeading" class="hero-subtitle">
+      Universal media hunter &mdash; inspect and download HD MP4, 4K WEBM, MP3 bitrates, and subtitles from any link.
+    </h1>
+
+    <form id="downloadForm" class="converter-form">
+      <div class="omnibox-wrapper">
+        <span id="platformBadge" class="detected-platform">Auto-Detect</span>
+        <input
+          type="url"
+          id="videoUrl"
+          class="url-input"
+          placeholder="Paste YouTube, TikTok, Instagram, X, Vimeo or any URL... (Press '/' to focus)"
+          required
+        />
+        <button type="button" id="clearBtn" class="icon-action-btn" title="Clear URL" style="display: none;">&#10005;</button>
+        <button type="button" id="pasteBtn" class="icon-action-btn" title="Paste from Clipboard">Paste</button>
+        <button type="submit" id="submitBtn" class="download-btn">Hunt File</button>
+      </div>
+
+      <!-- Optional FetchFile-style Clip Trimmer & Controls -->
+      <div class="advanced-toolbar">
+        <button type="button" id="toggleClipperBtn" class="nav-btn">
+          &#9986; Trim Video Clip (Optional)
+        </button>
+        <div id="clipperBox" class="clipper-box">
+          <label>Start:</label>
+          <input type="text" id="clipStart" class="time-input" placeholder="00:00:00" />
+          <label>End:</label>
+          <input type="text" id="clipEnd" class="time-input" placeholder="00:01:30" />
+        </div>
+      </div>
+    </form>
+
+    <!-- Google-Style Progress & Status -->
+    <div class="status-wrapper">
+      <div id="googleLoader" class="google-loader">
+        <div class="google-loader-bar"></div>
+      </div>
+      <div id="statusMessage" class="status-msg"></div>
+    </div>
+
+    <!-- Complex Multi-Tab Stream Inspector Card -->
+    <div id="resultCard" class="result-card">
+      <div class="video-meta">
+        <div class="thumb-wrapper">
+          <img id="videoThumb" src="" alt="Thumbnail" />
+          <span id="videoDurationBadge" class="duration-badge">0:00</span>
+        </div>
+        <div class="video-details">
+          <h3 id="videoTitle">Video Title</h3>
+          <div id="videoMetaChips" class="meta-chips"></div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a id="thumbDownloadBtn" href="#" target="_blank" class="format-item-btn secondary">
+              Download HD Thumbnail
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Google Material Stream Filter Tabs -->
+      <div class="format-tabs">
+        <button type="button" class="tab-btn active" data-tab="muxed">Video + Audio (MP4)</button>
+        <button type="button" class="tab-btn" data-tab="audio">Audio Only (MP3 / M4A)</button>
+        <button type="button" class="tab-btn" data-tab="videoonly">Pro Video Streams (DASH)</button>
+        <button type="button" class="tab-btn" data-tab="subtitles">Subtitles / Captions</button>
+      </div>
+
+      <!-- Detailed Stream Table -->
+      <div id="formatTableContainer"></div>
+    </div>
+  </section>
+
+  <!-- Main Content & Recent History -->
+  <main class="content-container">
+    <!-- Recent Searches History -->
+    <section id="historySection" class="history-section">
+      <div class="history-header">
+        <h3 style="font-size: 1.1rem;">Recent FileHunt Inspections</h3>
+        <button type="button" id="clearHistoryBtn" class="nav-btn">Clear History</button>
+      </div>
+      <div id="historyGrid" class="history-grid"></div>
+    </section>
+
+    <h2 id="seoTitle" style="margin-top: 24px;">Online Video Downloader &amp; Stream Inspector</h2>
+    <p>
+      <strong>FileHunt</strong> is a high-speed online media extractor and converter that lets you inspect streams and save videos from
+      <strong>YouTube, Vimeo, Dailymotion, X (Twitter), TikTok, Instagram, Facebook, SoundCloud, Twitch</strong>
+      <a href="service.html">and over 1,800+ supported platforms</a>.
+    </p>
+
+    <div class="feature-cards">
+      <div class="feature-card">
+        <h3>Full Stream Breakdown</h3>
+        <p>Inspect every available resolution from 144p to 4K Ultra HD with exact codecs (H.264, VP9, AV1), frame rates, and estimated file sizes.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Multi-Bitrate Audio</h3>
+        <p>Extract crystal-clear audio tracks directly into MP3 (320kbps, 192kbps, 128kbps) or original M4A/Opus containers on the fly.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Precision Video Clipper</h3>
+        <p>Need only a specific segment? Set custom start and end timestamps before downloading to cut clips directly on the server.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    &copy; FileHunt 2026 &bull; Powered by Google-inspired Material UI |
+    <a href="service.html">All Supported Sites</a> |
+    <a href="#">DMCA</a> |
+    <a href="#">API Status</a>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

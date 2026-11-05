@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FileHunt - All Supported Websites &amp; Extractors</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header class="navbar">
+    <a href="index.html" class="brand">
+      <div class="brand-icon">FH</div>
+      <div class="g-wordmark">
+        <span>F</span><span>i</span><span>l</span><span>e</span><span>H</span><span>u</span><span>n</span><span>t</span>
+      </div>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html" class="nav-btn primary">&larr; Back to Downloader</a>
+    </nav>
+  </header>
+
+  <main class="content-container">
+    <h2>FileHunt Supported Services Directory</h2>
+    <p style="text-align: center;">
+      Search across all supported video, audio, and social platforms. Click any service below to configure FileHunt for that site.
+    </p>
+
+    <!-- Sticky Google Search Filter + A-Z Jump Bar -->
+    <div class="directory-controls">
+      <div class="omnibox-wrapper" style="max-width: 620px; margin: 0 auto;">
+        <span id="serviceCountBadge" class="detected-platform active">Loading...</span>
+        <input
+          type="search"
+          id="serviceSearchInput"
+          class="url-input"
+          placeholder="Filter supported websites (e.g., YouTube, TikTok, BBC, SoundCloud)..."
+        />
+      </div>
+      <div id="alphaBar" class="alpha-bar"></div>
+    </div>
+
+    <div id="servicesContainer">
+      <p class="status-msg" style="text-align: center;">Loading all supported extractors...</p>
+    </div>
+  </main>
+
+  <footer class="footer">
+    &copy; FileHunt 2026 All rights reserved | <a href="index.html">Downloader</a> | <a href="#">DMCA</a>
+  </footer>
+
+  <script>
+    let allExtractors = [];
+    const container = document.getElementById('servicesContainer');
+    const searchInput = document.getElementById('serviceSearchInput');
+    const countBadge = document.getElementById('serviceCountBadge');
+    const alphaBar = document.getElementById('alphaBar');
+
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const allGroups = [...letters, '1-9'];
+
+    // Build A-Z Jump Pills
+    alphaBar.innerHTML = allGroups
+      .map(g => `<a href="#group-${g}" class="alpha-pill">${g}</a>`)
+      .join('');
+
+    function renderDirectory(filterText = '') {
+      const query = filterText.trim().toLowerCase();
+      const filtered = query
+        ? allExtractors.filter(name => name.toLowerCase().includes(query))
+        : allExtractors;
+
+      countBadge.textContent = `${filtered.length} Sites`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<p class="status-msg" style="text-align:center;">No matching services found for "${filterText}".</p>`;
+        return;
+      }
+
+      const groups = {};
+      allGroups.forEach(g => (groups[g] = []));
+
+      filtered.forEach(name => {
+        const firstChar = name.charAt(0).toUpperCase();
+        if (letters.includes(firstChar)) {
+          groups[firstChar].push(name);
+        } else {
+          groups['1-9'].push(name);
+        }
+      });
+
+      let html = '';
+      allGroups.forEach(groupKey => {
+        const items = groups[groupKey];
+        if (items.length > 0) {
+          html += `<div id="group-${groupKey}" class="alpha-heading">${groupKey} <span style="font-size:0.85rem;color:#5f6368;font-weight:500;">(${items.length})</span></div>`;
+          html += `<div class="service-grid">`;
+          items.forEach(serviceName => {
+            html += `
+              <div class="service-cell">
+                <a href="index.html?service=${encodeURIComponent(serviceName)}">${serviceName}</a>
+              </div>
+            `;
+          });
+          html += `</div>`;
+        }
+      });
+
+      container.innerHTML = html;
+    }
+
+    async function loadServices() {
+      try {
+        const res = await fetch('/api/extractors');
+        const data = await res.json();
+
+        if (!data.extractors) {
+          container.innerHTML = '<p>Failed to load services.</p>';
+          return;
+        }
+
+        allExtractors = data.extractors;
+        renderDirectory();
+      } catch (err) {
+        container.innerHTML = '<p class="status-msg error" style="text-align:center;">Error loading services list. Ensure server.js is running.</p>';
+      }
+    }
+
+    searchInput.addEventListener('input', (e) => {
+      renderDirectory(e.target.value);
+    });
+
+    loadServices();
+  </script>
+</body>
+</html>
