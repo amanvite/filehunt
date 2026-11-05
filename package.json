@@ -1,17 +1,16 @@
 {
   "name": "filehunt",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "FileHunt Studio - Universal Media Stream Inspector, Metadata Auditor & Public Media Downloader",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^5.3.0"
+    "express": "^4.19.2"
   }
 }

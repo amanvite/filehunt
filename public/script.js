@@ -7,11 +7,15 @@ const platformBadge = document.getElementById('platformBadge');
 const statusMessage = document.getElementById('statusMessage');
 const googleLoader = document.getElementById('googleLoader');
 const resultCard = document.getElementById('resultCard');
+const engineBadge = document.getElementById('engineBadge');
+const licenseBadge = document.getElementById('licenseBadge');
 const videoThumb = document.getElementById('videoThumb');
 const videoDurationBadge = document.getElementById('videoDurationBadge');
 const videoTitle = document.getElementById('videoTitle');
 const videoMetaChips = document.getElementById('videoMetaChips');
 const thumbDownloadBtn = document.getElementById('thumbDownloadBtn');
+const copyJsonBtn = document.getElementById('copyJsonBtn');
+const exportJsonBtn = document.getElementById('exportJsonBtn');
 const formatTableContainer = document.getElementById('formatTableContainer');
 const toggleClipperBtn = document.getElementById('toggleClipperBtn');
 const clipperBox = document.getElementById('clipperBox');
@@ -20,28 +24,60 @@ const clipEndInput = document.getElementById('clipEnd');
 const historySection = document.getElementById('historySection');
 const historyGrid = document.getElementById('historyGrid');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const singleModeBtn = document.getElementById('singleModeBtn');
+const batchModeBtn = document.getElementById('batchModeBtn');
+const batchContainer = document.getElementById('batchContainer');
+const batchInput = document.getElementById('batchInput');
+const runBatchBtn = document.getElementById('runBatchBtn');
+const batchResults = document.getElementById('batchResults');
+const toastBox = document.getElementById('toastBox');
 
 let currentMediaData = null;
 let currentUrl = '';
 let activeTab = 'muxed';
 
-// 1. Dynamic Service Adaptation from service.html (?service=...)
+function showToast(msg) {
+  if (!toastBox) return;
+  toastBox.textContent = msg;
+  toastBox.style.display = 'block';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => {
+    toastBox.style.display = 'none';
+  }, 3200);
+}
+
+// 1. Dynamic Service Mode from service.html
 const params = new URLSearchParams(window.location.search);
 const selectedService = params.get('service');
 if (selectedService && videoUrlInput) {
-  videoUrlInput.placeholder = `Paste ${selectedService} video or audio URL here...`;
+  videoUrlInput.placeholder = `Paste ${selectedService} URL here...`;
   const badge = document.getElementById('activeServiceBadge');
   const seoTitle = document.getElementById('seoTitle');
   if (badge) {
     badge.style.display = 'inline-flex';
-    badge.textContent = `${selectedService} Downloader Mode`;
+    badge.textContent = `${selectedService} Stream Inspector Active`;
   }
   if (seoTitle) {
-    seoTitle.textContent = `${selectedService} Video & Audio Downloader Online`;
+    seoTitle.textContent = `${selectedService} Media Stream Inspector & Downloader`;
   }
 }
 
-// 2. Keyboard shortcut '/' to focus Omnibox like Google Search
+// 2. Single vs Batch Mode Switcher
+singleModeBtn?.addEventListener('click', () => {
+  singleModeBtn.classList.add('active');
+  batchModeBtn.classList.remove('active');
+  downloadForm.style.display = 'block';
+  batchContainer.style.display = 'none';
+});
+
+batchModeBtn?.addEventListener('click', () => {
+  batchModeBtn.classList.add('active');
+  singleModeBtn.classList.remove('active');
+  downloadForm.style.display = 'none';
+  batchContainer.style.display = 'block';
+});
+
+// 3. Keyboard Shortcut '/' to focus URL input
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement !== videoUrlInput && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
     e.preventDefault();
@@ -49,17 +85,17 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 3. Auto-detect Platform as user types/pastes
+// 4. Platform Auto-Detector
 const PLATFORM_RULES = [
+  { name: 'Dailymotion', regex: /(dailymotion\.com|dai\.ly)/i },
   { name: 'YouTube', regex: /(youtube\.com|youtu\.be)/i },
   { name: 'TikTok', regex: /tiktok\.com/i },
   { name: 'Instagram', regex: /instagram\.com/i },
   { name: 'X / Twitter', regex: /(twitter\.com|x\.com)/i },
-  { name: 'Facebook', regex: /(facebook\.com|fb\.watch)/i },
   { name: 'Vimeo', regex: /vimeo\.com/i },
-  { name: 'Twitch', regex: /twitch\.tv/i },
   { name: 'SoundCloud', regex: /soundcloud\.com/i },
-  { name: 'Dailymotion', regex: /dailymotion\.com/i },
+  { name: 'Twitch', regex: /twitch\.tv/i },
+  { name: 'Facebook', regex: /(facebook\.com|fb\.watch)/i },
   { name: 'Reddit', regex: /reddit\.com/i }
 ];
 
@@ -72,23 +108,33 @@ function detectPlatform(url) {
   }
   clearBtn.style.display = 'inline-flex';
   const match = PLATFORM_RULES.find(p => p.regex.test(url));
-  platformBadge.textContent = match ? match.name : 'Web Link';
+  platformBadge.textContent = match ? match.name : 'Web Stream';
   platformBadge.classList.add('active');
 }
 
 videoUrlInput?.addEventListener('input', (e) => detectPlatform(e.target.value.trim()));
 
-// 4. Paste & Clear Buttons
+// 5. Sample Chips (1-click test including Dailymotion xbtliqi)
+document.querySelectorAll('.sample-chip[data-sample]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const sampleUrl = chip.getAttribute('data-sample');
+    videoUrlInput.value = sampleUrl;
+    detectPlatform(sampleUrl);
+    downloadForm.requestSubmit();
+  });
+});
+
+// 6. Paste, Clear & Clipper Controls
 pasteBtn?.addEventListener('click', async () => {
   try {
     const text = await navigator.clipboard.readText();
     if (text) {
       videoUrlInput.value = text.trim();
       detectPlatform(videoUrlInput.value);
-      videoUrlInput.focus();
+      showToast('URL pasted from clipboard');
     }
   } catch {
-    statusMessage.textContent = 'Press Ctrl+V / Cmd+V inside the box to paste your link.';
+    showToast('Press Ctrl+V / Cmd+V in the input field');
   }
 });
 
@@ -98,12 +144,10 @@ clearBtn?.addEventListener('click', () => {
   videoUrlInput.focus();
 });
 
-// 5. Toggle Video Clip Trimmer
 toggleClipperBtn?.addEventListener('click', () => {
   clipperBox.classList.toggle('open');
 });
 
-// 6. Format Helper Utilities
 function formatBytes(bytes) {
   if (!bytes || isNaN(bytes)) return 'Auto Size';
   const mb = bytes / (1024 * 1024);
@@ -119,27 +163,15 @@ function buildClipQuery() {
   return q;
 }
 
-// 7. Render Categorized Format Table (FetchFile-style complexity)
+// 7. Render the 6 Studio Tabs
 function renderActiveTab() {
   if (!currentMediaData) return;
   const clipQuery = buildClipQuery();
-  let rowsHtml = '';
+  const durSec = Number(currentMediaData.duration_seconds) || 60;
 
   if (activeTab === 'muxed') {
-    const resolutions = currentMediaData.resolutions || [1080, 720, 480, 360];
-    const detailedMuxed = currentMediaData.formats?.filter(f => f.category === 'muxed') || [];
-
-    const listToRender = detailedMuxed.length > 0
-      ? detailedMuxed
-      : resolutions.map(r => ({
-          resolution: r,
-          ext: 'MP4',
-          vcodec: r >= 1080 ? 'H.264 / AVC1 (HD)' : 'H.264 / AVC1',
-          fps: 30,
-          filesize: null
-        }));
-
-    rowsHtml = listToRender.map(item => {
+    const formats = currentMediaData.formats || [];
+    const rowsHtml = formats.map(item => {
       const res = item.resolution;
       const badgeClass = res >= 2160 ? 'quality-badge uhd' : 'quality-badge';
       const badgeText = res >= 2160 ? '4K UHD' : res >= 1440 ? '2K QHD' : res >= 1080 ? 'Full HD' : res >= 720 ? 'HD' : 'SD';
@@ -147,110 +179,167 @@ function renderActiveTab() {
 
       return `
         <tr>
-          <td>
-            <strong>${res}p</strong>
-            <span class="${badgeClass}">${badgeText}</span>
-          </td>
-          <td>MP4 (${item.vcodec || 'H.264'} + AAC)</td>
-          <td>${item.fps ? `${item.fps} fps` : 'Standard'}</td>
+          <td><strong>${res}p</strong> <span class="${badgeClass}">${badgeText}</span></td>
+          <td>${(item.ext || 'MP4').toUpperCase()} &bull; ${item.vcodec || 'H.264'} + ${item.acodec || 'AAC'}</td>
+          <td>${item.fps || 30} fps ${item.bitrate ? `&bull; ${item.bitrate}` : ''}</td>
           <td>${formatBytes(item.filesize)}</td>
           <td style="text-align: right;">
             <a href="${dlHref}" class="format-item-btn" data-label="${res}p MP4">
-              &#8681; Download MP4
+              &#8681; Save ${res}p MP4
             </a>
           </td>
         </tr>
       `;
     }).join('');
+
+    formatTableContainer.innerHTML = `
+      <table class="format-table">
+        <thead>
+          <tr>
+            <th>Resolution</th>
+            <th>Container &amp; Codecs</th>
+            <th>Frame Rate / Bitrate</th>
+            <th>Est. Size</th>
+            <th style="text-align: right;">Stream Action</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
   } else if (activeTab === 'audio') {
     const audioPresets = [
-      { bitrate: 320, label: '320 kbps', desc: 'Studio Master MP3', ext: 'MP3', sizeFactor: 2.4 },
-      { bitrate: 192, label: '192 kbps', desc: 'High Quality MP3', ext: 'MP3', sizeFactor: 1.5 },
-      { bitrate: 128, label: '128 kbps', desc: 'Standard Portable MP3', ext: 'MP3', sizeFactor: 1.0 },
-      { bitrate: 'm4a', label: 'Original M4A', desc: 'AAC Direct Audio Stream', ext: 'M4A', sizeFactor: 1.1 }
+      { bitrate: 320, label: '320 kbps', desc: 'Studio Archival MP3 (LAME V0)', ext: 'MP3', kbps: 320 },
+      { bitrate: 256, label: '256 kbps', desc: 'Premium Broadcast MP3', ext: 'MP3', kbps: 256 },
+      { bitrate: 192, label: '192 kbps', desc: 'High Quality Stereo MP3', ext: 'MP3', kbps: 192 },
+      { bitrate: 128, label: '128 kbps', desc: 'Standard Mobile MP3', ext: 'MP3', kbps: 128 },
+      { bitrate: 'm4a', label: 'Original M4A', desc: 'Native AAC Audio Container', ext: 'M4A', kbps: 160 }
     ];
 
-    rowsHtml = audioPresets.map(a => {
+    const rowsHtml = audioPresets.map(a => {
+      const estBytes = Math.round(((a.kbps * 1000) / 8) * durSec);
       const dlHref = `/api/download?url=${encodeURIComponent(currentUrl)}&type=mp3&bitrate=${a.bitrate}${clipQuery}`;
       return `
         <tr>
           <td><strong>${a.label}</strong> <span class="quality-badge">${a.ext}</span></td>
           <td>${a.desc}</td>
-          <td>Stereo 44.1kHz</td>
-          <td>Fast Conversion</td>
+          <td>44.1 kHz Stereo</td>
+          <td>${formatBytes(estBytes)}</td>
           <td style="text-align: right;">
-            <a href="${dlHref}" class="format-item-btn mp3" data-label="${a.label} Audio">
-              &#9835; Download ${a.ext}
+            <a href="${dlHref}" class="format-item-btn mp3" data-label="${a.label} ${a.ext}">
+              &#9835; Extract ${a.ext}
             </a>
           </td>
         </tr>
       `;
     }).join('');
-  } else if (activeTab === 'videoonly') {
-    const resolutions = currentMediaData.resolutions || [1080, 720];
-    rowsHtml = resolutions.map(res => {
-      const dlHref = `/api/download?url=${encodeURIComponent(currentUrl)}&type=videoonly&resolution=${res}${clipQuery}`;
-      return `
+
+    formatTableContainer.innerHTML = `
+      <table class="format-table">
+        <thead>
+          <tr>
+            <th>Bitrate</th>
+            <th>Audio Profile</th>
+            <th>Sample Rate</th>
+            <th>Est. Size</th>
+            <th style="text-align: right;">Action</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
+  } else if (activeTab === 'preview') {
+    if (currentMediaData.embed_url) {
+      formatTableContainer.innerHTML = `
+        <div class="preview-box">
+          <iframe src="${currentMediaData.embed_url}" allowfullscreen allow="autoplay; encrypted-media"></iframe>
+          <p style="margin-top: 10px; font-size: 0.82rem; color: #475569;">
+            Official Embedded Stream Player &bull; Use this preview to find exact timestamps for the Clip Trimmer above.
+          </p>
+        </div>
+      `;
+    } else if (currentMediaData.direct_media_url) {
+      formatTableContainer.innerHTML = `
+        <div class="preview-box">
+          <video src="${currentMediaData.direct_media_url}" controls style="width:100%;max-height:360px;border-radius:8px;"></video>
+        </div>
+      `;
+    } else {
+      formatTableContainer.innerHTML = `
+        <div class="preview-box">
+          <p style="margin-bottom: 12px;">Direct iframe embed is restricted by this host, but you can open the source stream directly:</p>
+          <a href="${currentUrl}" target="_blank" rel="noopener" class="format-item-btn mp3">Open Source Stream in New Tab &rarr;</a>
+        </div>
+      `;
+    }
+  } else if (activeTab === 'thumbnails') {
+    const thumbs = currentMediaData.thumbnails?.length
+      ? currentMediaData.thumbnails
+      : currentMediaData.thumbnail
+      ? [{ label: 'Primary Cover Frame', url: currentMediaData.thumbnail }]
+      : [];
+
+    if (thumbs.length === 0) {
+      formatTableContainer.innerHTML = `<p style="padding:14px;color:#64748b;">No public thumbnail frames detected for this URL.</p>`;
+    } else {
+      const rowsHtml = thumbs.map(t => `
         <tr>
-          <td><strong>${res}p Raw Video</strong> <span class="quality-badge">DASH</span></td>
-          <td>MP4 / WebM (No Audio Track)</td>
-          <td>High Bitrate Stream</td>
-          <td>Direct Stream</td>
+          <td><strong>${t.label}</strong> <span class="quality-badge">JPG / WEBP</span></td>
+          <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.url}</td>
           <td style="text-align: right;">
-            <a href="${dlHref}" class="format-item-btn secondary" data-label="${res}p Raw Stream">
-              &#8681; Save Video Stream
+            <a href="${t.url}" target="_blank" rel="noopener" class="format-item-btn secondary">
+              &#128444; View / Save Image
             </a>
           </td>
         </tr>
+      `).join('');
+
+      formatTableContainer.innerHTML = `
+        <table class="format-table">
+          <thead>
+            <tr>
+              <th>Artwork Variant</th>
+              <th>Source CDN URL</th>
+              <th style="text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
       `;
-    }).join('');
-  } else if (activeTab === 'subtitles') {
+    }
+  } else if (activeTab === 'metadata') {
     const subs = currentMediaData.subtitles || ['en'];
-    rowsHtml = subs.map(lang => {
+    const subButtons = subs.map(lang => {
       const dlHref = `/api/download?url=${encodeURIComponent(currentUrl)}&type=subtitles&lang=${encodeURIComponent(lang)}`;
-      return `
-        <tr>
-          <td><strong>${lang.toUpperCase()}</strong> <span class="quality-badge">SRT / VTT</span></td>
-          <td>Closed Captions / Auto-Subtitles</td>
-          <td>Text Track</td>
-          <td>&lt; 100 KB</td>
-          <td style="text-align: right;">
-            <a href="${dlHref}" class="format-item-btn secondary" data-label="${lang.toUpperCase()} Subtitles">
-              &#8681; Download .SRT
-            </a>
-          </td>
-        </tr>
-      `;
-    }).join('');
+      return `<a href="${dlHref}" class="format-item-btn secondary">&#8681; Download .SRT (${lang.toUpperCase()})</a>`;
+    }).join(' ');
+
+    formatTableContainer.innerHTML = `
+      <div style="margin-bottom: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <strong style="font-size: 0.85rem;">Captions / Subtitles:</strong>
+        ${subButtons}
+      </div>
+      <pre class="json-pre">${JSON.stringify(currentMediaData, null, 2)}</pre>
+    `;
+  } else if (activeTab === 'qrcode') {
+    const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(currentUrl)}`;
+    formatTableContainer.innerHTML = `
+      <div class="preview-box">
+        <img src="${qrApiUrl}" alt="QR Code" style="width:180px;height:180px;border:1px solid #e2e8f0;padding:8px;background:#fff;border-radius:12px;" />
+        <p style="margin-top: 10px; font-size: 0.86rem; font-weight: 600;">
+          Scan with your phone camera to open or save this media stream directly on mobile.
+        </p>
+      </div>
+    `;
   }
 
-  formatTableContainer.innerHTML = `
-    <table class="format-table">
-      <thead>
-        <tr>
-          <th>Quality</th>
-          <th>Container / Codec</th>
-          <th>Stream Info</th>
-          <th>Est. Size</th>
-          <th style="text-align: right;">Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rowsHtml}
-      </tbody>
-    </table>
-  `;
-
-  formatTableContainer.querySelectorAll('.format-item-btn').forEach(btn => {
+  formatTableContainer.querySelectorAll('.format-item-btn[data-label]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const label = btn.getAttribute('data-label') || 'media';
-      statusMessage.classList.remove('error');
-      statusMessage.textContent = `Preparing ${label}... Your browser download will begin automatically once processed.`;
+      const label = btn.getAttribute('data-label');
+      showToast(`Preparing ${label} stream package...`);
     });
   });
 }
 
-// Tab Switching
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -260,7 +349,18 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-// 8. LocalStorage History Management
+// Copy & Export JSON Audit
+copyJsonBtn?.addEventListener('click', async () => {
+  if (!currentMediaData) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(currentMediaData, null, 2));
+    showToast('Stream JSON metadata copied to clipboard!');
+  } catch {
+    showToast('Unable to copy automatically');
+  }
+});
+
+// 8. History Storage
 function saveToHistory(item) {
   try {
     const existing = JSON.parse(localStorage.getItem('filehunt_history') || '[]');
@@ -282,9 +382,9 @@ function renderHistory() {
     historySection.style.display = 'block';
     historyGrid.innerHTML = list.map(item => `
       <div class="history-item" data-url="${encodeURIComponent(item.url)}">
-        <img src="${item.thumbnail || 'https://via.placeholder.com/140x80?text=Media'}" alt="Thumb" />
+        <img src="${item.thumbnail || 'https://via.placeholder.com/140x80?text=Stream'}" alt="Thumb" />
         <div class="history-item-info">
-          <div class="history-item-title">${item.title || 'Media File'}</div>
+          <div class="history-item-title">${item.title || 'Media Stream'}</div>
           <div class="history-item-sub">${item.extractor || 'Web'} &bull; ${item.duration || ''}</div>
         </div>
       </div>
@@ -293,6 +393,7 @@ function renderHistory() {
     historyGrid.querySelectorAll('.history-item').forEach(card => {
       card.addEventListener('click', () => {
         const u = decodeURIComponent(card.getAttribute('data-url'));
+        singleModeBtn.click();
         videoUrlInput.value = u;
         detectPlatform(u);
         downloadForm.requestSubmit();
@@ -304,11 +405,12 @@ function renderHistory() {
 clearHistoryBtn?.addEventListener('click', () => {
   localStorage.removeItem('filehunt_history');
   renderHistory();
+  showToast('Inspection history cleared');
 });
 
 renderHistory();
 
-// 9. Form Submission & Stream Analysis
+// 9. Single URL Submit Handler
 if (downloadForm) {
   downloadForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -317,10 +419,10 @@ if (downloadForm) {
 
     currentUrl = url;
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Hunting...';
+    submitBtn.textContent = 'Inspecting...';
     googleLoader.classList.add('active');
     statusMessage.classList.remove('error');
-    statusMessage.textContent = 'Inspecting media streams, codecs, and audio bitrates...';
+    statusMessage.textContent = 'Running 3-tier stream inspection (Public API / oEmbed / OpenGraph)...';
     resultCard.style.display = 'none';
 
     try {
@@ -340,18 +442,20 @@ if (downloadForm) {
 
       currentMediaData = data;
       statusMessage.textContent = '';
+      engineBadge.textContent = data.engine || 'Multi-Engine Cloud Inspector';
+      licenseBadge.textContent = data.license || 'Public Web Stream';
       videoTitle.textContent = data.title || 'Untitled Media';
-      videoDurationBadge.textContent = data.duration || 'LIVE / N/A';
-      videoThumb.src = data.thumbnail || 'https://via.placeholder.com/210x118?text=No+Preview';
-      thumbDownloadBtn.href = data.thumbnail || '#';
+      videoDurationBadge.textContent = data.duration || 'Stream';
+      videoThumb.src = data.thumbnail || 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=640&q=80';
+      thumbDownloadBtn.href = data.thumbnail || currentUrl;
+      exportJsonBtn.href = `/api/download?url=${encodeURIComponent(currentUrl)}&type=metadata`;
 
-      // Build Google-style metadata chips
       const chips = [
-        `Source: ${data.extractor || 'Detected'}`,
-        `Duration: ${data.duration || 'N/A'}`,
-        data.uploader ? `Channel: ${data.uploader}` : null,
+        `Platform: ${data.extractor || 'Web'}`,
+        `Duration: ${data.duration || 'Stream'}`,
+        data.uploader ? `Creator: ${data.uploader}` : null,
         data.view_count ? `Views: ${Number(data.view_count).toLocaleString()}` : null,
-        `${(data.resolutions || []).length} Video Qualities`
+        data.upload_date ? `Date: ${data.upload_date}` : null
       ].filter(Boolean);
 
       videoMetaChips.innerHTML = chips.map(c => `<span class="meta-chip">${c}</span>`).join('');
@@ -363,6 +467,7 @@ if (downloadForm) {
 
       renderActiveTab();
       resultCard.style.display = 'block';
+      showToast(`Resolved via ${data.engine}`);
 
       saveToHistory({
         url,
@@ -373,11 +478,68 @@ if (downloadForm) {
       });
     } catch (error) {
       statusMessage.classList.add('error');
-      statusMessage.textContent = 'Network error: Make sure your Node.js server (server.js) is running.';
+      statusMessage.textContent = 'Connection error: Please verify your server is running.';
     } finally {
       googleLoader.classList.remove('active');
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Hunt File';
+      submitBtn.textContent = 'Inspect & Hunt';
     }
   });
 }
+
+// 10. Batch Queue Inspector
+runBatchBtn?.addEventListener('click', async () => {
+  const lines = (batchInput.value || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    showToast('Please paste at least one URL');
+    return;
+  }
+
+  runBatchBtn.disabled = true;
+  runBatchBtn.textContent = 'Inspecting Queue...';
+  batchResults.innerHTML = `<p style="font-size:0.85rem;color:#64748b;">Processing ${lines.length} URL(s) in parallel...</p>`;
+
+  try {
+    const res = await fetch('/api/batch-info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: lines })
+    });
+    const data = await res.json();
+    if (!data.results) {
+      batchResults.innerHTML = `<p style="color:#d93025;">Failed to inspect batch.</p>`;
+      return;
+    }
+
+    batchResults.innerHTML = data.results.map(item => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;background:#f8fafc;">
+        <div style="overflow:hidden;padding-right:12px;">
+          <div style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.data.title || item.url}</div>
+          <div style="font-size:0.75rem;color:#64748b;">${item.data.extractor || 'Web'} &bull; ${item.data.engine || 'Resolved'}</div>
+        </div>
+        <button type="button" class="format-item-btn batch-load-btn" data-url="${encodeURIComponent(item.url)}">
+          Open in Inspector &rarr;
+        </button>
+      </div>
+    `).join('');
+
+    batchResults.querySelectorAll('.batch-load-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const u = decodeURIComponent(btn.getAttribute('data-url'));
+        singleModeBtn.click();
+        videoUrlInput.value = u;
+        detectPlatform(u);
+        downloadForm.requestSubmit();
+      });
+    });
+  } catch {
+    batchResults.innerHTML = `<p style="color:#d93025;">Error running batch inspection.</p>`;
+  } finally {
+    runBatchBtn.disabled = false;
+    runBatchBtn.textContent = 'Inspect All Links';
+  }
+});

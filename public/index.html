@@ -3,34 +3,56 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FileHunt - Universal Video & Audio Downloader</title>
+  <title>FileHunt Studio — Universal Media Stream Inspector &amp; Legal Downloader</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- Top Navigation Bar -->
+  <!-- Glassmorphic Studio Header -->
   <header class="navbar">
-    <a href="index.html" class="brand">
-      <div class="brand-icon">FH</div>
-      <div class="g-wordmark">
-        <span>F</span><span>i</span><span>l</span><span>e</span><span>H</span><span>u</span><span>n</span><span>t</span>
+    <div class="brand-group">
+      <a href="index.html" class="brand">
+        <div class="brand-mark">
+          <div class="brand-dots">
+            <span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <span>FileHunt</span>
+        <span class="brand-badge">Studio 2.0</span>
+      </a>
+      <div class="system-status-pill" title="oEmbed + OpenGraph + Local Stream Engines Active">
+        <span class="status-dot"></span>
+        <span>3 Engines Online</span>
       </div>
-    </a>
+    </div>
+
     <nav class="nav-links">
-      <a href="service.html" class="nav-btn">Supported Sites (1800+) &#9776;</a>
+      <a href="service.html" class="nav-btn">Supported Sites (1800+)</a>
+      <a href="legal.html" class="nav-btn">Legal &amp; DMCA</a>
     </nav>
   </header>
 
-  <!-- Google-Inspired Hero Omnibox Section -->
+  <!-- White Architectural Hero Workspace -->
   <section class="hero-box">
-    <div id="activeServiceBadge" class="service-pill-badge" style="display: none;"></div>
-    <div class="hero-logo-large g-wordmark">
-      <span>F</span><span>i</span><span>l</span><span>e</span><span>H</span><span>u</span><span>n</span><span>t</span>
+    <div id="activeServiceBadge" class="hero-eyebrow" style="display: none;"></div>
+    <div class="hero-eyebrow">
+      <span>Multi-Engine Media Inspector &bull; Public API + oEmbed + OpenGraph</span>
     </div>
-    <h1 id="heroHeading" class="hero-subtitle">
-      Universal media hunter &mdash; inspect and download HD MP4, 4K WEBM, MP3 bitrates, and subtitles from any link.
-    </h1>
 
+    <h1 class="hero-title">
+      Inspect &amp; Save Public Media with <span class="accent">FileHunt</span>
+    </h1>
+    <p id="heroHeading" class="hero-subtitle">
+      Zero-failure stream analysis for Dailymotion, YouTube, Vimeo, TikTok, SoundCloud, and direct web streams &mdash; engineered for legal public &amp; Creative Commons media.
+    </p>
+
+    <!-- Workspace Mode Switcher -->
+    <div class="mode-switcher">
+      <button type="button" id="singleModeBtn" class="mode-btn active">Single URL Inspector</button>
+      <button type="button" id="batchModeBtn" class="mode-btn">Batch Queue (Up to 10 URLs)</button>
+    </div>
+
+    <!-- Single URL Omnibox Form -->
     <form id="downloadForm" class="converter-form">
       <div class="omnibox-wrapper">
         <span id="platformBadge" class="detected-platform">Auto-Detect</span>
@@ -38,29 +60,60 @@
           type="url"
           id="videoUrl"
           class="url-input"
-          placeholder="Paste YouTube, TikTok, Instagram, X, Vimeo or any URL... (Press '/' to focus)"
+          placeholder="Paste Dailymotion, YouTube, Vimeo, TikTok or direct media URL..."
           required
         />
-        <button type="button" id="clearBtn" class="icon-action-btn" title="Clear URL" style="display: none;">&#10005;</button>
-        <button type="button" id="pasteBtn" class="icon-action-btn" title="Paste from Clipboard">Paste</button>
-        <button type="submit" id="submitBtn" class="download-btn">Hunt File</button>
+        <span class="kbd-hint" title="Press / to focus">/</span>
+        <button type="button" id="clearBtn" class="icon-action-btn" style="display: none;">&#10005;</button>
+        <button type="button" id="pasteBtn" class="icon-action-btn">Paste</button>
+        <button type="submit" id="submitBtn" class="download-btn">Inspect &amp; Hunt</button>
       </div>
 
-      <!-- Optional FetchFile-style Clip Trimmer & Controls -->
-      <div class="advanced-toolbar">
-        <button type="button" id="toggleClipperBtn" class="nav-btn">
-          &#9986; Trim Video Clip (Optional)
+      <!-- One-Click Instant Test Presets & Clip Trimmer -->
+      <div class="sample-bar">
+        <span style="font-size: 0.76rem; color: #64748b; font-weight: 600;">Try Instant Sample:</span>
+        <button type="button" class="sample-chip" data-sample="https://www.dailymotion.com/video/xbtliqi">
+          Dailymotion (xbtliqi)
         </button>
+        <button type="button" class="sample-chip" data-sample="https://www.youtube.com/watch?v=aqz-KE-bpKQ">
+          Big Buck Bunny (CC-BY 4K)
+        </button>
+        <button type="button" class="sample-chip" data-sample="https://vimeo.com/76979871">
+          Vimeo HD Stream
+        </button>
+        <button type="button" id="toggleClipperBtn" class="sample-chip">
+          &#9986; Clip Timestamp
+        </button>
+      </div>
+
+      <div style="display: flex; justify-content: center;">
         <div id="clipperBox" class="clipper-box">
-          <label>Start:</label>
+          <label style="font-size: 0.78rem; font-weight: 600;">Start:</label>
           <input type="text" id="clipStart" class="time-input" placeholder="00:00:00" />
-          <label>End:</label>
-          <input type="text" id="clipEnd" class="time-input" placeholder="00:01:30" />
+          <label style="font-size: 0.78rem; font-weight: 600;">End:</label>
+          <input type="text" id="clipEnd" class="time-input" placeholder="00:00:30" />
         </div>
       </div>
     </form>
 
-    <!-- Google-Style Progress & Status -->
+    <!-- Batch Queue Form -->
+    <div id="batchContainer" class="batch-container">
+      <p style="font-size: 0.85rem; color: #475569; margin-bottom: 8px; font-weight: 600;">
+        Paste one URL per line (up to 10 links) to inspect them simultaneously:
+      </p>
+      <textarea
+        id="batchInput"
+        class="batch-textarea"
+        placeholder="https://www.dailymotion.com/video/xbtliqi&#10;https://www.youtube.com/watch?v=aqz-KE-bpKQ&#10;https://vimeo.com/76979871"
+      ></textarea>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.78rem; color: #64748b;">Uses parallel oEmbed + OpenGraph cloud resolvers</span>
+        <button type="button" id="runBatchBtn" class="download-btn">Inspect All Links</button>
+      </div>
+      <div id="batchResults" style="margin-top: 16px;"></div>
+    </div>
+
+    <!-- Progress & Diagnostics Bar -->
     <div class="status-wrapper">
       <div id="googleLoader" class="google-loader">
         <div class="google-loader-bar"></div>
@@ -68,76 +121,91 @@
       <div id="statusMessage" class="status-msg"></div>
     </div>
 
-    <!-- Complex Multi-Tab Stream Inspector Card -->
+    <!-- 6-Tab Deep Media Inspector Result Card -->
     <div id="resultCard" class="result-card">
+      <div class="engine-banner">
+        <div>
+          Resolved via: <span id="engineBadge" class="engine-tag">Multi-Engine Cloud Inspector</span>
+        </div>
+        <span id="licenseBadge" class="license-tag">Authorized Public Stream</span>
+      </div>
+
       <div class="video-meta">
         <div class="thumb-wrapper">
-          <img id="videoThumb" src="" alt="Thumbnail" />
+          <img id="videoThumb" src="" alt="Media Cover" />
           <span id="videoDurationBadge" class="duration-badge">0:00</span>
         </div>
         <div class="video-details">
-          <h3 id="videoTitle">Video Title</h3>
+          <h3 id="videoTitle">Media Title</h3>
           <div id="videoMetaChips" class="meta-chips"></div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <a id="thumbDownloadBtn" href="#" target="_blank" class="format-item-btn secondary">
-              Download HD Thumbnail
+          <div class="quick-actions">
+            <a id="thumbDownloadBtn" href="#" target="_blank" rel="noopener" class="format-item-btn secondary">
+              &#128444; Open HD Thumbnail
+            </a>
+            <button type="button" id="copyJsonBtn" class="format-item-btn secondary">
+              &#128203; Copy Stream JSON
+            </button>
+            <a id="exportJsonBtn" href="#" class="format-item-btn secondary">
+              &#11015; Export Audit (.JSON)
             </a>
           </div>
         </div>
       </div>
 
-      <!-- Google Material Stream Filter Tabs -->
+      <!-- 6 Studio Tabs -->
       <div class="format-tabs">
-        <button type="button" class="tab-btn active" data-tab="muxed">Video + Audio (MP4)</button>
-        <button type="button" class="tab-btn" data-tab="audio">Audio Only (MP3 / M4A)</button>
-        <button type="button" class="tab-btn" data-tab="videoonly">Pro Video Streams (DASH)</button>
-        <button type="button" class="tab-btn" data-tab="subtitles">Subtitles / Captions</button>
+        <button type="button" class="tab-btn active" data-tab="muxed">1. Video + Audio (MP4)</button>
+        <button type="button" class="tab-btn" data-tab="audio">2. Audio Bitrates (MP3 / M4A)</button>
+        <button type="button" class="tab-btn" data-tab="preview">3. Live Stream Preview</button>
+        <button type="button" class="tab-btn" data-tab="thumbnails">4. Thumbnails &amp; Artwork</button>
+        <button type="button" class="tab-btn" data-tab="metadata">5. Metadata &amp; Subtitles</button>
+        <button type="button" class="tab-btn" data-tab="qrcode">6. Mobile QR Handoff</button>
       </div>
 
-      <!-- Detailed Stream Table -->
+      <!-- Dynamic Tab Content Container -->
       <div id="formatTableContainer"></div>
     </div>
   </section>
 
-  <!-- Main Content & Recent History -->
+  <!-- Main Workspace Info & History -->
   <main class="content-container">
-    <!-- Recent Searches History -->
     <section id="historySection" class="history-section">
       <div class="history-header">
-        <h3 style="font-size: 1.1rem;">Recent FileHunt Inspections</h3>
+        <h3 style="font-size: 1.08rem; font-weight: 800;">Recent Workspace Inspections</h3>
         <button type="button" id="clearHistoryBtn" class="nav-btn">Clear History</button>
       </div>
       <div id="historyGrid" class="history-grid"></div>
     </section>
 
-    <h2 id="seoTitle" style="margin-top: 24px;">Online Video Downloader &amp; Stream Inspector</h2>
-    <p>
-      <strong>FileHunt</strong> is a high-speed online media extractor and converter that lets you inspect streams and save videos from
-      <strong>YouTube, Vimeo, Dailymotion, X (Twitter), TikTok, Instagram, Facebook, SoundCloud, Twitch</strong>
-      <a href="service.html">and over 1,800+ supported platforms</a>.
+    <h2 id="seoTitle" style="text-align: center; font-size: 1.65rem; font-weight: 800;">
+      Enterprise-Grade Media Stream Inspector &amp; Public Archiver
+    </h2>
+    <p style="text-align: center; max-width: 720px; margin: 8px auto 0 auto; color: #475569;">
+      FileHunt combines official platform oEmbed APIs, semantic OpenGraph extraction, and local stream transcoding so you never hit a broken link.
     </p>
 
-    <div class="feature-cards">
-      <div class="feature-card">
-        <h3>Full Stream Breakdown</h3>
-        <p>Inspect every available resolution from 144p to 4K Ultra HD with exact codecs (H.264, VP9, AV1), frame rates, and estimated file sizes.</p>
+    <div class="bento-grid">
+      <div class="bento-card">
+        <h3>3-Tier Zero-Failure Engine</h3>
+        <p>Automatically cascades from Official Public REST/oEmbed APIs (Dailymotion, YouTube, Vimeo, TikTok) to OpenGraph meta inspection and local stream engines.</p>
       </div>
-      <div class="feature-card">
-        <h3>Multi-Bitrate Audio</h3>
-        <p>Extract crystal-clear audio tracks directly into MP3 (320kbps, 192kbps, 128kbps) or original M4A/Opus containers on the fly.</p>
+      <div class="bento-card">
+        <h3>Live Embed &amp; Bitrate Calculator</h3>
+        <p>Preview official video streams directly inside the inspector card, calculate exact MP4/MP3 bitrates, and export complete JSON technical audits.</p>
       </div>
-      <div class="feature-card">
-        <h3>Precision Video Clipper</h3>
-        <p>Need only a specific segment? Set custom start and end timestamps before downloading to cut clips directly on the server.</p>
+      <div class="bento-card">
+        <h3>100% Legal &amp; DMCA Compliant</h3>
+        <p>Built strictly for non-DRM public streams, Creative Commons archives, educational open-access videos, and creator-owned content auditing.</p>
       </div>
     </div>
   </main>
 
+  <div id="toastBox" class="toast-box"></div>
+
   <footer class="footer">
-    &copy; FileHunt 2026 &bull; Powered by Google-inspired Material UI |
-    <a href="service.html">All Supported Sites</a> |
-    <a href="#">DMCA</a> |
-    <a href="#">API Status</a>
+    &copy; 2026 FileHunt Studio &bull; Engineered for Authorized Public Media Inspection |
+    <a href="service.html">Supported Platforms</a> |
+    <a href="legal.html">Terms, Privacy &amp; DMCA Policy</a>
   </footer>
 
   <script src="script.js"></script>
