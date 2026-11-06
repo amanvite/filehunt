@@ -1,88 +1,95 @@
 import React, { useState, useEffect } from 'react';
 import { html } from './Icons.js';
 
-// build downloadable endpoint with the actual video title attached
-function buildDownloadHref({ url, title, type = 'mp4', resolution = 720, bitrate = 192, lang = 'en' }) {
+// build preparation endpoint URL with the video title attached
+function buildPrepareHref({ url, title, type = 'mp4', resolution = 720, bitrate = 192 }) {
   const params = new URLSearchParams({
     url,
     title: title || 'Video',
     type,
     resolution: String(resolution),
     bitrate: String(bitrate),
-    lang
+    prepare: '1'
   });
   return `/api/download?${params.toString()}`;
 }
 
-export default function InspectorCard({ mediaData, sourceUrl, onDownloadStart }) {
-  const resolutions = mediaData?.resolutions?.length ? mediaData.resolutions : [1080, 720, 480, 360];
-  const [selectedPreset, setSelectedPreset] = useState(`mp4:${resolutions[0]}`);
-  const [activeTab, setActiveTab] = useState('video');
+export default function InspectorCard({ mediaData, sourceUrl, onDownloadApology }) {
+  // use ONLY the real video and audio formats discovered by /api/info for this specific video
+  const videoFormats = Array.isArray(mediaData?.videoFormats)
+    ? mediaData.videoFormats
+    : (mediaData?.resolutions || []).map(r => ({
+        resolution: r,
+        ext: 'mp4',
+        codec: 'Video (H.264 + AAC)',
+        sizeText: null
+      }));
+
+  const audioFormats = Array.isArray(mediaData?.audioFormats) ? mediaData.audioFormats : [];
+
+  const defaultPreset = videoFormats.length > 0
+    ? `mp4:${videoFormats[0].resolution}`
+    : audioFormats.length > 0
+    ? `mp3:${audioFormats[0].bitrate}`
+    : '';
+
+  const [selectedPreset, setSelectedPreset] = useState(defaultPreset);
   const [thumbFailed, setThumbFailed] = useState(false);
-  const [downloadingKey, setDownloadingKey] = useState(null);
+  const [busyKey, setBusyKey] = useState(null);
 
   useEffect(() => {
-    const topRes = mediaData?.resolutions?.[0] || 1080;
-    setSelectedPreset(`mp4:${topRes}`);
-    setActiveTab('video');
+    const firstVideo = mediaData?.videoFormats?.[0]?.resolution || mediaData?.resolutions?.[0];
+    const firstAudio = mediaData?.audioFormats?.[0]?.bitrate;
+    if (firstVideo) setSelectedPreset(`mp4:${firstVideo}`);
+    else if (firstAudio) setSelectedPreset(`mp3:${firstAudio}`);
     setThumbFailed(false);
-    setDownloadingKey(null);
+    setBusyKey(null);
   }, [mediaData]);
 
-  if (!mediaData) return null;
+  if (!mediaData || (videoFormats.length === 0 && audioFormats.length === 0)) return null;
 
   const [selType, selVal] = selectedPreset.split(':');
-  const primaryHref =
+  const primaryParams =
     selType === 'mp3'
-      ? buildDownloadHref({ url: sourceUrl, title: mediaData.title, type: 'mp3', bitrate: selVal })
-      : buildDownloadHref({ url: sourceUrl, title: mediaData.title, type: 'mp4', resolution: selVal });
+      ? { url: sourceUrl, title: mediaData.title, type: 'mp3', bitrate: selVal }
+      : { url: sourceUrl, title: mediaData.title, type: 'mp4', resolution: selVal };
 
   const proxiedThumb = mediaData.thumbnail
     ? `/api/proxy-image?url=${encodeURIComponent(mediaData.thumbnail)}`
     : '';
 
-  // handle file download without navigating the browser tab away to a raw error screen
-  const triggerSafeDownload = async (e, downloadHref, labelKey, statusLabel) => {
+  const handleDownloadClick = async (e, paramsObj, keyId) => {
     e.preventDefault();
-    if (downloadingKey) return;
+    if (busyKey) return;
 
-    setDownloadingKey(labelKey);
-    onDownloadStart(statusLabel, false);
+    setBusyKey(keyId);
+    onDownloadApology('');
 
     try {
-      const response = await fetch(downloadHref);
-      const contentType = response.headers.get('content-type') || '';
+      const prepUrl = buildPrepareHref(paramsObj);
+      const res = await fetch(prepUrl);
+      const data = await res.json().catch(() => ({}));
 
-      if (!response.ok || contentType.includes('application/json')) {
-        const errData = await response.json().catch(() => ({}));
-        onDownloadStart(
-          errData.error || 'Could not extract a playable video stream from this page.',
-          true
+      if (!res.ok || !data.ok || !data.downloadUrl) {
+        onDownloadApology(
+          data.apology ||
+            'We apologize, but FileHunt is unable to extract a downloadable video from this link right now. Please try another link or resolution.'
         );
-        setDownloadingKey(null);
         return;
       }
 
-      // extract filename from Content-Disposition header
-      const disposition = response.headers.get('content-disposition') || '';
-      const nameMatch = disposition.match(/filename="([^"]+)"/i);
-      const fileName = nameMatch ? nameMatch[1] : `${mediaData.title || 'video'}.mp4`;
-
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = fileName;
+      a.href = data.downloadUrl;
+      a.download = data.filename || `${mediaData.title || 'video'}.mp4`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-
-      onDownloadStart(`Saved "${fileName}" to your downloads.`, false);
     } catch {
-      onDownloadStart('Download interrupted. Make sure server.js is running.', true);
+      onDownloadApology(
+        'We apologize, but FileHunt could not complete the download for this video right now.'
+      );
     } finally {
-      setDownloadingKey(null);
+      setBusyKey(null);
     }
   };
 
@@ -100,19 +107,19 @@ export default function InspectorCard({ mediaData, sourceUrl, onDownloadStart })
               `
             : html`
                 <div className="thumb-fallback">
-                  <span>${mediaData.extractor || 'HD VIDEO'}</span>
+                  <span>${mediaData.extractor || 'VIDEO'}</span>
                 </div>
               `}
-          <span className="media-duration-pill">${mediaData.duration || 'HD'}</span>
+          <span className="media-duration-pill">${mediaData.duration || 'Video'}</span>
         </div>
 
         <div className="media-summary-col">
           <h3 className="media-heading">${mediaData.title || 'Video Stream'}</h3>
 
           <div className="media-badge-row">
-            ${mediaData.extractor && html`<span className="meta-pill">Platform: ${mediaData.extractor}</span>`}
-            ${mediaData.uploader && html`<span className="meta-pill">Creator: ${mediaData.uploader}</span>`}
-            <span className="meta-pill">Duration: ${mediaData.duration || 'HD'}</span>
+            ${mediaData.extractor && html`<span className="meta-pill">Source: ${mediaData.extractor}</span>`}
+            ${mediaData.uploader && html`<span className="meta-pill">Channel: ${mediaData.uploader}</span>`}
+            <span className="meta-pill">Duration: ${mediaData.duration || 'Video'}</span>
           </div>
 
           <div className="primary-action-bar">
@@ -122,198 +129,107 @@ export default function InspectorCard({ mediaData, sourceUrl, onDownloadStart })
               onChange=${e => setSelectedPreset(e.target.value)}
               aria-label="Select stream quality"
             >
-              ${resolutions.map(
-                res => html`<option key=${`mp4:${res}`} value=${`mp4:${res}`}>MP4 ${res}p (H.264)</option>`
+              ${videoFormats.map(
+                vf => html`
+                  <option key=${`mp4:${vf.resolution}`} value=${`mp4:${vf.resolution}`}>
+                    MP4 ${vf.resolution}p ${vf.sizeText ? `(${vf.sizeText})` : '(H.264)'}
+                  </option>
+                `
               )}
-              <option value="mp3:320">MP3 Audio (320kbps)</option>
-              <option value="mp3:192">MP3 Audio (192kbps)</option>
+              ${audioFormats.map(
+                af => html`
+                  <option key=${`mp3:${af.bitrate}`} value=${`mp3:${af.bitrate}`}>
+                    MP3 Audio (${af.label})
+                  </option>
+                `
+              )}
             </select>
 
             <a
-              href=${primaryHref}
+              href="#download"
               className="btn-download-main"
-              style=${{ opacity: downloadingKey ? 0.65 : 1, pointerEvents: downloadingKey ? 'none' : 'auto' }}
-              onClick=${e =>
-                triggerSafeDownload(
-                  e,
-                  primaryHref,
-                  'primary',
-                  `Downloading "${mediaData.title}" — preparing file...`
-                )}
+              style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
+              onClick=${e => handleDownloadClick(e, primaryParams, 'primary')}
             >
-              ${downloadingKey === 'primary' ? 'Downloading...' : 'Download Now'}
+              ${busyKey === 'primary' ? 'Preparing...' : 'Download Now'}
             </a>
           </div>
         </div>
       </div>
 
-      <div className="inspector-tabs">
-        <button
-          type="button"
-          className=${`inspector-tab-btn ${activeTab === 'video' ? 'active' : ''}`}
-          onClick=${() => setActiveTab('video')}
-        >
-          Video Streams (MP4)
-        </button>
-        <button
-          type="button"
-          className=${`inspector-tab-btn ${activeTab === 'audio' ? 'active' : ''}`}
-          onClick=${() => setActiveTab('audio')}
-        >
-          Audio Tracks (MP3)
-        </button>
-        <button
-          type="button"
-          className=${`inspector-tab-btn ${activeTab === 'subtitles' ? 'active' : ''}`}
-          onClick=${() => setActiveTab('subtitles')}
-        >
-          Subtitles (.SRT)
-        </button>
-      </div>
+      <!-- unified table showing ONLY the real verified Video (MP4) and Audio (MP3) qualities for this video -->
+      <table className="stream-matrix-table" style=${{ marginTop: '14px' }}>
+        <thead>
+          <tr>
+            <th>Format & Quality</th>
+            <th>Container / Codec</th>
+            <th>Size / Compatibility</th>
+            <th style=${{ textAlign: 'right' }}>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${videoFormats.map(vf => {
+            const res = vf.resolution;
+            const badge =
+              res >= 2160
+                ? '4K UHD'
+                : res >= 1440
+                ? '2K QHD'
+                : res >= 1080
+                ? 'Full HD'
+                : res >= 720
+                ? 'HD'
+                : 'SD';
+            const rowParams = { url: sourceUrl, title: mediaData.title, type: 'mp4', resolution: res };
+            const rowKey = `mp4-${res}`;
+            return html`
+              <tr key=${rowKey}>
+                <td>
+                  <strong>MP4 ${res}p</strong>
+                  <span className="res-tag">${badge}</span>
+                </td>
+                <td>${vf.codec || 'Video (H.264 + AAC)'}</td>
+                <td>${vf.sizeText ? `${vf.sizeText} • Windows / Mac / Mobile` : 'Windows / Mac / Mobile'}</td>
+                <td style=${{ textAlign: 'right' }}>
+                  <a
+                    href="#download"
+                    className="table-dl-btn"
+                    style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
+                    onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
+                  >
+                    ${busyKey === rowKey ? 'Preparing...' : 'Download MP4'}
+                  </a>
+                </td>
+              </tr>
+            `;
+          })}
 
-      ${activeTab === 'video' &&
-      html`
-        <table className="stream-matrix-table">
-          <thead>
-            <tr>
-              <th>Quality</th>
-              <th>Container & Codec</th>
-              <th>Compatibility</th>
-              <th style=${{ textAlign: 'right' }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${resolutions.map(res => {
-              const badge = res >= 2160 ? '4K UHD' : res >= 1440 ? '2K QHD' : res >= 1080 ? 'Full HD' : res >= 720 ? 'HD' : 'SD';
-              const dlUrl = buildDownloadHref({ url: sourceUrl, title: mediaData.title, type: 'mp4', resolution: res });
-              const rowKey = `mp4-${res}`;
-              return html`
-                <tr key=${res}>
-                  <td>
-                    <strong>${res}p</strong>
-                    <span className="res-tag">${badge}</span>
-                  </td>
-                  <td>MP4 (H.264 + AAC)</td>
-                  <td>Windows / Mac / Mobile</td>
-                  <td style=${{ textAlign: 'right' }}>
-                    <a
-                      href=${dlUrl}
-                      className="table-dl-btn"
-                      onClick=${e =>
-                        triggerSafeDownload(
-                          e,
-                          dlUrl,
-                          rowKey,
-                          `Downloading "${mediaData.title}" (${res}p MP4)...`
-                        )}
-                    >
-                      ${downloadingKey === rowKey ? 'Saving...' : 'Download MP4'}
-                    </a>
-                  </td>
-                </tr>
-              `;
-            })}
-          </tbody>
-        </table>
-      `}
-
-      ${activeTab === 'audio' &&
-      html`
-        <table className="stream-matrix-table">
-          <thead>
-            <tr>
-              <th>Bitrate</th>
-              <th>Profile</th>
-              <th>Sample Rate</th>
-              <th style=${{ textAlign: 'right' }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${[
-              { bitrate: 320, label: '320 kbps', desc: 'Studio Archival MP3' },
-              { bitrate: 192, label: '192 kbps', desc: 'High Quality Stereo MP3' },
-              { bitrate: 128, label: '128 kbps', desc: 'Standard Portable MP3' }
-            ].map(item => {
-              const dlUrl = buildDownloadHref({ url: sourceUrl, title: mediaData.title, type: 'mp3', bitrate: item.bitrate });
-              const rowKey = `mp3-${item.bitrate}`;
-              return html`
-                <tr key=${item.bitrate}>
-                  <td>
-                    <strong>${item.label}</strong>
-                    <span className="res-tag">MP3</span>
-                  </td>
-                  <td>${item.desc}</td>
-                  <td>44.1 kHz Stereo</td>
-                  <td style=${{ textAlign: 'right' }}>
-                    <a
-                      href=${dlUrl}
-                      className="table-dl-btn"
-                      onClick=${e =>
-                        triggerSafeDownload(
-                          e,
-                          dlUrl,
-                          rowKey,
-                          `Extracting "${mediaData.title}" (${item.label} MP3)...`
-                        )}
-                    >
-                      ${downloadingKey === rowKey ? 'Extracting...' : 'Extract MP3'}
-                    </a>
-                  </td>
-                </tr>
-              `;
-            })}
-          </tbody>
-        </table>
-      `}
-
-      ${activeTab === 'subtitles' &&
-      html`
-        <table className="stream-matrix-table">
-          <thead>
-            <tr>
-              <th>Language</th>
-              <th>Format</th>
-              <th>Encoding</th>
-              <th style=${{ textAlign: 'right' }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${[
-              { code: 'en', name: 'English' },
-              { code: 'es', name: 'Spanish' },
-              { code: 'fr', name: 'French' }
-            ].map(l => {
-              const dlUrl = buildDownloadHref({ url: sourceUrl, title: mediaData.title, type: 'subtitles', lang: l.code });
-              const rowKey = `sub-${l.code}`;
-              return html`
-                <tr key=${l.code}>
-                  <td>
-                    <strong>${l.name}</strong>
-                    <span className="res-tag">${l.code.toUpperCase()}</span>
-                  </td>
-                  <td>SubRip Subtitle Track (.SRT)</td>
-                  <td>UTF-8 Timed Text</td>
-                  <td style=${{ textAlign: 'right' }}>
-                    <a
-                      href=${dlUrl}
-                      className="table-dl-btn"
-                      onClick=${e =>
-                        triggerSafeDownload(
-                          e,
-                          dlUrl,
-                          rowKey,
-                          `Saving ${l.name} subtitles (.SRT)...`
-                        )}
-                    >
-                      Save .SRT
-                    </a>
-                  </td>
-                </tr>
-              `;
-            })}
-          </tbody>
-        </table>
-      `}
+          ${audioFormats.map(item => {
+            const rowParams = { url: sourceUrl, title: mediaData.title, type: 'mp3', bitrate: item.bitrate };
+            const rowKey = `mp3-${item.bitrate}`;
+            return html`
+              <tr key=${rowKey}>
+                <td>
+                  <strong>MP3 ${item.label}</strong>
+                  <span className="res-tag audio-tag">AUDIO</span>
+                </td>
+                <td>${item.desc}</td>
+                <td>All Media Players</td>
+                <td style=${{ textAlign: 'right' }}>
+                  <a
+                    href="#download"
+                    className="table-dl-btn audio-dl-btn"
+                    style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
+                    onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
+                  >
+                    ${busyKey === rowKey ? 'Preparing...' : 'Download MP3'}
+                  </a>
+                </td>
+              </tr>
+            `;
+          })}
+        </tbody>
+      </table>
     </div>
   `;
 }

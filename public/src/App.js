@@ -16,16 +16,27 @@ export default function App() {
   const [urlInput, setUrlInput] = useState('');
   const [inputUnlocked, setInputUnlocked] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [statusText, setStatusText] = useState('');
-  const [isError, setIsError] = useState(false);
+  const [apologyText, setApologyText] = useState('');
   const [mediaData, setMediaData] = useState(null);
   const [inspectedUrl, setInspectedUrl] = useState('');
-  const [sitesCatalog, setSitesCatalog] = useState(CORE_SITES_DATA);
+  const [sitesCatalog, setSitesCatalog] = useState(() =>
+    [...CORE_SITES_DATA].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    )
+  );
 
   const inputRef = useRef(null);
 
-  // load supported extractors list from backend on mount
   useEffect(() => {
+    // if redirected back with ?apology=1, show a polite apology on the Home page and clean the URL
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('apology')) {
+      setApologyText(
+        'We apologize, but FileHunt is unable to extract a downloadable video from that link right now. Please try another video URL.'
+      );
+      window.history.replaceState({}, '', '/');
+    }
+
     fetch('/api/extractors')
       .then(r => r.json())
       .then(data => {
@@ -34,26 +45,26 @@ export default function App() {
           const extra = data.extractors
             .filter(name => !seen.has(name.toLowerCase()))
             .map(createExtractorEntry);
-          setSitesCatalog([...CORE_SITES_DATA, ...extra]);
+          const mergedSorted = [...CORE_SITES_DATA, ...extra].sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+          );
+          setSitesCatalog(mergedSorted);
         }
       })
       .catch(() => {});
   }, []);
 
-  // switch views smoothly without altering the browser URL
   const switchView = (viewName) => {
     setActiveView(viewName);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // handle choosing a specific platform from the Sites view
   const handleSelectSite = (siteLabel) => {
     setSelectedSite(siteLabel);
     switchView('home');
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
-  // inspect video link and load stream options
   const handleInspectSubmit = async (e) => {
     e.preventDefault();
     const trimmed = urlInput.trim();
@@ -63,8 +74,7 @@ export default function App() {
     }
 
     setIsLoading(true);
-    setIsError(false);
-    setStatusText('Inspecting available video and audio streams...');
+    setApologyText('');
     setMediaData(null);
 
     try {
@@ -73,20 +83,32 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: trimmed })
       });
-      const data = await res.json();
+
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        throw new Error(
+          'We apologize, but FileHunt could not read this link right now. Please check the URL and try again.'
+        );
+      }
 
       if (!res.ok || data.error) {
-        setIsError(true);
-        setStatusText(data.error || 'Unable to process this link. Verify the URL and try again.');
+        setApologyText(
+          data.error ||
+            'We apologize, but FileHunt is unable to process this link right now. Please verify the URL and try again.'
+        );
         return;
       }
 
-      setStatusText('');
       setInspectedUrl(trimmed);
       setMediaData(data);
-    } catch {
-      setIsError(true);
-      setStatusText('Network error: make sure node server.js is running.');
+    } catch (err) {
+      setApologyText(
+        err.message ||
+          'We apologize, but FileHunt is temporarily unable to reach this video source.'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -161,7 +183,7 @@ export default function App() {
                     onClick=${() => {
                       setUrlInput('');
                       setMediaData(null);
-                      setStatusText('');
+                      setApologyText('');
                       inputRef.current?.focus();
                     }}
                   >
@@ -169,7 +191,7 @@ export default function App() {
                   </button>
                 `}
                 <button type="submit" className="omnibox-submit-btn" disabled=${isLoading}>
-                  ${isLoading ? 'Processing...' : 'Download'}
+                  ${isLoading ? 'Loading...' : 'Download'}
                 </button>
               </form>
 
@@ -183,18 +205,17 @@ export default function App() {
               <div className=${`progress-track ${isLoading ? 'active' : ''}`}>
                 <div className="progress-fill"></div>
               </div>
-              ${statusText && html`
-                <div className=${`status-banner ${isError ? 'error' : ''}`}>${statusText}</div>
+              ${apologyText && html`
+                <div className="apology-banner">
+                  ${apologyText}
+                </div>
               `}
             </div>
 
             <${InspectorCard}
               mediaData=${mediaData}
               sourceUrl=${inspectedUrl}
-              onDownloadStart=${(msg, isErr = false) => {
-                setIsError(Boolean(isErr));
-                setStatusText(msg);
-              }}
+              onDownloadApology=${msg => setApologyText(msg)}
             />
 
             <div className="seo-description-block">
@@ -265,9 +286,6 @@ export default function App() {
             onClick=${() => switchView('privacy')}
           >
             Privacy Policy
-          </a>
-          <a href="https://github.com/amanvite" target="_blank" rel="noopener noreferrer">
-            GitHub
           </a>
         </nav>
         <div className="footer-copyright">© 2026 FileHunt. All rights reserved.</div>

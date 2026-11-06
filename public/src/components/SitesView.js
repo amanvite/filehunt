@@ -5,13 +5,18 @@ export default function SitesView({ sitesCatalog, onSelectSite }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
+  // filter and sort all sites in strict alphabetical order
   const filteredSites = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return sitesCatalog.filter(item => {
-      const catOk = selectedCategory === 'all' || item.category === selectedCategory;
-      const queryOk = !q || item.name.toLowerCase().includes(q) || item.label.toLowerCase().includes(q);
-      return catOk && queryOk;
-    });
+    return sitesCatalog
+      .filter(item => {
+        const catOk = selectedCategory === 'all' || item.category === selectedCategory;
+        const queryOk = !q || item.name.toLowerCase().includes(q) || item.label.toLowerCase().includes(q);
+        return catOk && queryOk;
+      })
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
   }, [sitesCatalog, searchQuery, selectedCategory]);
 
   return html`
@@ -51,7 +56,7 @@ export default function SitesView({ sitesCatalog, onSelectSite }) {
 
       <div className="sites-section">
         <div className="sites-section-header">
-          <span className="sites-section-title">All resources</span>
+          <span className="sites-section-title">All resources (A–Z)</span>
           <span className="sites-count-badge">${filteredSites.length} resources</span>
         </div>
 
