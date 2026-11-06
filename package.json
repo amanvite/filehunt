@@ -1,19 +1,16 @@
 {
   "name": "filehunt",
-  "version": "3.5.0",
-  "description": "FileHunt - Universal Online Video Downloader",
+  "version": "4.0.0",
+  "description": "FileHunt - Modular Universal Media Stream Inspector & Downloader",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node --watch server.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "express": "^4.19.2"
-  },
-  "optionalDependencies": {
-    "ffmpeg-static": "^5.2.0"
+    "express": "^4.21.2"
   }
 }

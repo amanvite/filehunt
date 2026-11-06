@@ -1,58 +1,30 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { html, BrandDownloadIcon, SearchIcon } from './components/Icons.js';
 import InspectorCard from './components/InspectorCard.js';
 import SitesView from './components/SitesView.js';
 import LegalView from './components/LegalView.js';
-import {
-  CORE_SITES_DATA,
-  createExtractorEntry,
-  TERMS_CLAUSES,
-  PRIVACY_CLAUSES
-} from './data/sitesData.js';
+import { useMediaInspector } from './hooks/useMediaInspector.js';
+import { TERMS_CLAUSES, PRIVACY_CLAUSES } from './data/sitesData.js';
 
 export default function App() {
   const [activeView, setActiveView] = useState('home');
   const [selectedSite, setSelectedSite] = useState(null);
-  const [urlInput, setUrlInput] = useState('');
   const [inputUnlocked, setInputUnlocked] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [apologyText, setApologyText] = useState('');
-  const [mediaData, setMediaData] = useState(null);
-  const [inspectedUrl, setInspectedUrl] = useState('');
-  const [sitesCatalog, setSitesCatalog] = useState(() =>
-    [...CORE_SITES_DATA].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-    )
-  );
+
+  const {
+    urlInput,
+    setUrlInput,
+    isLoading,
+    apologyText,
+    setApologyText,
+    mediaData,
+    inspectedUrl,
+    sitesCatalog,
+    inspectUrl,
+    resetInspector
+  } = useMediaInspector();
 
   const inputRef = useRef(null);
-
-  useEffect(() => {
-    // if redirected back with ?apology=1, show a polite apology on the Home page and clean the URL
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('apology')) {
-      setApologyText(
-        'We apologize, but FileHunt is unable to extract a downloadable video from that link right now. Please try another video URL.'
-      );
-      window.history.replaceState({}, '', '/');
-    }
-
-    fetch('/api/extractors')
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data.extractors)) {
-          const seen = new Set(CORE_SITES_DATA.map(s => s.label.toLowerCase()));
-          const extra = data.extractors
-            .filter(name => !seen.has(name.toLowerCase()))
-            .map(createExtractorEntry);
-          const mergedSorted = [...CORE_SITES_DATA, ...extra].sort((a, b) =>
-            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-          );
-          setSitesCatalog(mergedSorted);
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   const switchView = (viewName) => {
     setActiveView(viewName);
@@ -65,53 +37,13 @@ export default function App() {
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
-  const handleInspectSubmit = async (e) => {
+  const handleFormSubmit = async (e) => {
     e.preventDefault();
-    const trimmed = urlInput.trim();
-    if (!trimmed) {
+    if (!urlInput.trim()) {
       inputRef.current?.focus();
       return;
     }
-
-    setIsLoading(true);
-    setApologyText('');
-    setMediaData(null);
-
-    try {
-      const res = await fetch('/api/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: trimmed })
-      });
-
-      const rawText = await res.text();
-      let data = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        throw new Error(
-          'We apologize, but FileHunt could not read this link right now. Please check the URL and try again.'
-        );
-      }
-
-      if (!res.ok || data.error) {
-        setApologyText(
-          data.error ||
-            'We apologize, but FileHunt is unable to process this link right now. Please verify the URL and try again.'
-        );
-        return;
-      }
-
-      setInspectedUrl(trimmed);
-      setMediaData(data);
-    } catch (err) {
-      setApologyText(
-        err.message ||
-          'We apologize, but FileHunt is temporarily unable to reach this video source.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    await inspectUrl(urlInput);
   };
 
   const BrandHeader = ({ subtitle }) => html`
@@ -157,7 +89,7 @@ export default function App() {
             />
 
             <div className="search-box-wrap">
-              <form className="google-omnibox" onSubmit=${handleInspectSubmit} autoComplete="off" noValidate>
+              <form className="google-omnibox" onSubmit=${handleFormSubmit} autoComplete="off" noValidate>
                 <${SearchIcon} />
                 <input
                   ref=${inputRef}
@@ -181,9 +113,7 @@ export default function App() {
                     className="omnibox-clear-btn"
                     title="Clear link"
                     onClick=${() => {
-                      setUrlInput('');
-                      setMediaData(null);
-                      setApologyText('');
+                      resetInspector();
                       inputRef.current?.focus();
                     }}
                   >
