@@ -1,41 +1,6 @@
 // allow scraping video hosts with self-signed or incomplete SSL certificate chains
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-// self-healing module guard so a corrupted or cached node_modules/debug never crashes Express
-const Module = require('module');
-const originalLoad = Module._load;
-Module._load = function (request, parent, isMain) {
-  try {
-    return originalLoad.apply(this, arguments);
-  } catch (err) {
-    if (err && err.code === 'MODULE_NOT_FOUND' && (request === './debug' || request === 'debug')) {
-      const debugShim = function createDebug(namespace) {
-        function debug() {}
-        debug.namespace = namespace;
-        debug.enabled = false;
-        debug.useColors = false;
-        debug.color = 0;
-        debug.destroy = () => {};
-        debug.extend = () => debug;
-        return debug;
-      };
-      debugShim.debug = debugShim;
-      debugShim.default = debugShim;
-      debugShim.coerce = val => val;
-      debugShim.disable = () => '';
-      debugShim.enable = () => {};
-      debugShim.enabled = () => false;
-      debugShim.humanize = ms => `${ms}ms`;
-      debugShim.names = [];
-      debugShim.skips = [];
-      debugShim.formatters = {};
-      debugShim.selectColor = () => 0;
-      return debugShim;
-    }
-    throw err;
-  }
-};
-
 const express = require('express');
 const path = require('path');
 const { PORT, IS_VERCEL } = require('./src/config/constants');
@@ -43,7 +8,19 @@ const { handleApiRequest } = require('./src/routes/apiRouter');
 const { initLocalBinaries } = require('./src/extractors/ytdlpBridge');
 
 const app = express();
-const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// resolve public directory reliably across local Node and Vercel serverless containers
+const PUBLIC_DIR = fsExistsSafe(path.join(__dirname, 'public'))
+  ? path.join(__dirname, 'public')
+  : path.join(process.cwd(), 'public');
+
+function fsExistsSafe(p) {
+  try {
+    return require('fs').existsSync(p);
+  } catch {
+    return false;
+  }
+}
 
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -57,22 +34,28 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.static(PUBLIC_DIR));
 app.use('/src/components', express.static(path.join(PUBLIC_DIR, 'components')));
 
-// route all /api/* requests to our modular API handler
+// route all /api/* requests to our modular API controller
 app.use('/api', async (req, res, next) => {
   try {
     req.pathname = '/api' + (req.path === '/' ? '' : req.path);
+    // adapt express req/res to match our API router signature
+    req.query = req.query || {};
     await handleApiRequest(req, res);
   } catch (err) {
     next(err);
   }
 });
 
-// SPA fallback for client-side views
+// SPA fallback for client-side view routing
 app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'API endpoint not found' });
   }
-  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  const indexFile = path.join(PUBLIC_DIR, 'index.html');
+  if (fsExistsSafe(indexFile)) {
+    return res.sendFile(indexFile);
+  }
+  res.status(404).send('index.html not found');
 });
 
 app.use((err, req, res, _next) => {

@@ -10,10 +10,10 @@ const {
 } = require('../services/mediaPipeline');
 
 async function handleApiRequest(req, res) {
-  const route = req.pathname;
+  const route = req.pathname || req.path;
 
   // GET /api/health
-  if (req.method === 'GET' && route === '/api/health') {
+  if (req.method === 'GET' && (route === '/api/health' || route === '/health')) {
     return res.json({
       status: 'ok',
       version: '4.0.0',
@@ -22,12 +22,12 @@ async function handleApiRequest(req, res) {
   }
 
   // GET /api/extractors
-  if (req.method === 'GET' && route === '/api/extractors') {
+  if (req.method === 'GET' && (route === '/api/extractors' || route === '/extractors')) {
     return res.json({ extractors: BUILTIN_EXTRACTORS });
   }
 
   // GET /api/proxy-image
-  if (req.method === 'GET' && route === '/api/proxy-image') {
+  if (req.method === 'GET' && (route === '/api/proxy-image' || route === '/proxy-image')) {
     const { url } = req.query || {};
     if (!url) return res.status(400).send('');
 
@@ -60,7 +60,7 @@ async function handleApiRequest(req, res) {
   }
 
   // POST /api/info
-  if (req.method === 'POST' && route === '/api/info') {
+  if (req.method === 'POST' && (route === '/api/info' || route === '/info')) {
     const { url } = req.body || {};
     if (!url) {
       return res.status(400).json({ error: 'Please paste a valid video link.' });
@@ -97,7 +97,7 @@ async function handleApiRequest(req, res) {
   }
 
   // GET /api/download
-  if (req.method === 'GET' && route === '/api/download') {
+  if (req.method === 'GET' && (route === '/api/download' || route === '/download')) {
     const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192', prepare, token } = req.query || {};
 
     if (token) {
@@ -116,8 +116,7 @@ async function handleApiRequest(req, res) {
         readStream.on('close', () => {
           fs.unlink(entry.filePath, () => {});
         });
-        readStream.pipe(res);
-        return;
+        return readStream.pipe(res);
       }
 
       if (entry.mode === 'direct') {
@@ -140,8 +139,7 @@ async function handleApiRequest(req, res) {
             res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
             res.setHeader('Content-Type', entry.ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
             if (contentLen) res.setHeader('Content-Length', String(contentLen));
-            Readable.fromWeb(upstream.body).pipe(res);
-            return;
+            return Readable.fromWeb(upstream.body).pipe(res);
           }
         } catch {}
       }
