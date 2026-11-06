@@ -1,60 +1,141 @@
 // allow scraping video hosts with self-signed or incomplete SSL certificate chains
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const express = require('express');
+const http = require('http');
+const fs = require('fs');
 const path = require('path');
 const { PORT, IS_VERCEL } = require('./src/config/constants');
-const apiRouter = require('./src/routes/apiRouter');
+const { handleApiRequest } = require('./src/routes/apiRouter');
 const { initLocalBinaries } = require('./src/extractors/ytdlpBridge');
 
-const app = express();
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// disable x-powered-by header and apply baseline security headers
-app.disable('x-powered-by');
-app.use((req, res, next) => {
+// MIME type lookup for serving static frontend files cleanly
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon'
+};
+
+// attach Express-like helper methods (.status, .json, .send) onto native http.ServerResponse
+function decorateResponse(res) {
+  res.status = function (code) {
+    res.statusCode = code;
+    return res;
+  };
+
+  res.json = function (payload) {
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
+    res.end(JSON.stringify(payload));
+    return res;
+  };
+
+  res.send = function (body) {
+    if (Buffer.isBuffer(body) || typeof body === 'string') {
+      res.end(body);
+    } else {
+      res.json(body);
+    }
+    return res;
+  };
+
+  res.redirect = function (locationUrl) {
+    res.statusCode = 302;
+    res.setHeader('Location', locationUrl);
+    res.end();
+    return res;
+  };
+
+  return res;
+}
+
+// read and parse JSON request body for POST endpoints
+function parseJsonBody(req) {
+  return new Promise((resolve) => {
+    if (req.method !== 'POST') return resolve({});
+    if (req.body && typeof req.body === 'object') return resolve(req.body);
+
+    let raw = '';
+    req.on('data', chunk => {
+      raw += chunk.toString();
+      if (raw.length > 1024 * 1024) req.destroy();
+    });
+    req.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+// main request handler for both local HTTP server and Vercel serverless invocations
+async function requestHandler(req, res) {
+  decorateResponse(res);
+
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  next();
-});
 
-app.use(express.json({ limit: '1mb' }));
+  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = decodeURIComponent(parsedUrl.pathname);
+  req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+  req.pathname = pathname;
 
-// serve static frontend assets from public/
-const PUBLIC_DIR = path.join(__dirname, 'public');
-app.use(express.static(PUBLIC_DIR));
-app.use('/src/components', express.static(path.join(PUBLIC_DIR, 'components')));
+  try {
+    // route /api/* calls to our API router
+    if (pathname.startsWith('/api/')) {
+      req.body = await parseJsonBody(req);
+      await handleApiRequest(req, res);
+      return;
+    }
 
-// mount all /api/* endpoints
-app.use('/api', apiRouter);
+    // resolve static files inside public/
+    const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const safeCandidate = path.normalize(path.join(PUBLIC_DIR, relativePath));
 
-// SPA fallback using app.use instead of app.get('*') so Express 4 & 5 never throw path-to-regexp errors
-app.use((req, res) => {
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'API endpoint not found' });
+    if (safeCandidate.startsWith(PUBLIC_DIR) && fs.existsSync(safeCandidate) && fs.statSync(safeCandidate).isFile()) {
+      const ext = path.extname(safeCandidate).toLowerCase();
+      res.statusCode = 200;
+      res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream');
+      fs.createReadStream(safeCandidate).pipe(res);
+      return;
+    }
+
+    // SPA fallback: serve public/index.html for any view route
+    const indexHtmlPath = path.join(PUBLIC_DIR, 'index.html');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    fs.createReadStream(indexHtmlPath).pipe(res);
+  } catch (err) {
+    console.error('[FileHunt Server Error]:', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'We apologize, but an unexpected server error occurred. Please try again.'
+      });
+    }
   }
-  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
-});
+}
 
-// global error boundary so an unhandled exception never crashes the process
-app.use((err, req, res, _next) => {
-  console.error('[FileHunt Error]:', err.message);
-  if (!res.headersSent) {
-    res.status(500).json({
-      error: 'We apologize, but an unexpected server error occurred. Please try again.'
-    });
-  }
-});
-
-// warm up local yt-dlp binary only when running on my local machine
 if (!IS_VERCEL) {
   initLocalBinaries();
 }
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const server = http.createServer(requestHandler);
+  server.listen(PORT, () => {
     console.log(`FileHunt v4.0 running at http://localhost:${PORT}`);
   });
 }
 
-module.exports = app;
+module.exports = requestHandler;

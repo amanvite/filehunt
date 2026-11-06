@@ -8,7 +8,6 @@ const { scrapePageDeep } = require('../extractors/htmlStreamScraper');
 const { parseHlsMasterManifest } = require('../extractors/hlsParser');
 const { getLocalFfmpegPath, runYtDlp, inspectViaYtDlp } = require('../extractors/ytdlpBridge');
 
-// O(1) LRU caches for inspected sessions and prepared downloads
 const sessionCache = new LruCache(250, 10 * 60 * 1000);
 const preparedTokens = new LruCache(250, 15 * 60 * 1000);
 
@@ -48,7 +47,7 @@ async function inspectMediaUrl(rawUrl) {
     } catch {}
   }
 
-  // Tier 3: Deep HTML / KVS / Packed JS / Child Iframe / HLS Manifest Scraper (works on both Vercel and Localhost)
+  // Tier 3: Deep HTML / KVS / Packed JS / Child Iframe / HLS Manifest Scraper
   const deepData = await scrapePageDeep(targetUrl);
   if (deepData && deepData.videoFormats?.length > 0) {
     sessionCache.set(targetUrl, deepData);
@@ -70,7 +69,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
   const refererToUse = session.finalPageUrl || url;
   const targetResNum = Number(resolution);
 
-  // 1. Verified direct MP4 stream (works on both Vercel and Localhost)
+  // 1. Verified direct MP4 stream
   if (type !== 'mp3') {
     const directMap = session.verifiedDirectMap || {};
     const availableRes = Object.keys(directMap).map(Number).sort((a, b) => b - a);
@@ -91,7 +90,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     }
   }
 
-  // 2. Local yt-dlp download & muxing (when running on localhost)
+  // 2. Local yt-dlp download & muxing
   if (!IS_VERCEL) {
     const ffmpegBin = getLocalFfmpegPath();
     const hlsVariant = session.hlsVariantsByRes?.[targetResNum]?.url;
@@ -173,7 +172,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     }
   }
 
-  // 3. Pure-Node HLS (.m3u8) segment streamer fallback (works on Vercel without ffmpeg!)
+  // 3. Pure-Node HLS (.m3u8) segment streamer fallback
   const hlsVariantUrl =
     session.hlsVariantsByRes?.[targetResNum]?.url ||
     Object.values(session.hlsVariantsByRes || {})[0]?.url ||

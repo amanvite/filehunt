@@ -27,8 +27,6 @@
   --accent-green-soft: #dcfce7;
   --accent-red: #dc2626;
   --accent-red-soft: #fef2f2;
-  --accent-amber: #d97706;
-  --accent-amber-soft: #fef3c7;
 
   --border-light: #e2e8f0;
   --border-default: #cbd5e1;
@@ -64,7 +62,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* main layout container */
 .app-container {
   width: 100%;
   max-width: 900px;
@@ -73,7 +70,6 @@ body {
   flex: 1;
 }
 
-/* single-page view switcher so the browser URL never needs to change */
 .view-panel {
   display: none;
   animation: fadeInView 0.18s ease-out;
@@ -94,7 +90,6 @@ body {
   }
 }
 
-/* solid, high-contrast brand header (no rainbow letters) */
 .brand-header {
   text-align: center;
   margin-bottom: 30px;
@@ -182,7 +177,6 @@ body {
   color: var(--text-primary);
 }
 
-/* Google-inspired pill search bar */
 .search-box-wrap {
   max-width: 680px;
   margin: 26px auto 0 auto;
@@ -229,6 +223,21 @@ body {
   color: #9aa0a6;
 }
 
+.omnibox-clear-btn {
+  background: none;
+  border: none;
+  color: #9aa0a6;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.omnibox-clear-btn:hover {
+  color: var(--text-primary);
+}
+
 .omnibox-submit-btn {
   background-color: var(--accent-blue);
   color: #ffffff;
@@ -260,7 +269,6 @@ body {
   box-shadow: none;
 }
 
-/* strict copyright warning line right below the search bar */
 .prohibition-notice {
   text-align: center;
   font-size: 0.82rem;
@@ -279,7 +287,6 @@ body {
   text-decoration: underline;
 }
 
-/* indeterminate progress bar & status feedback */
 .diagnostics-wrap {
   max-width: 660px;
   margin: 18px auto 0 auto;
@@ -312,17 +319,19 @@ body {
   100% { transform: translateX(300%); }
 }
 
-.status-banner {
+.apology-banner {
+  max-width: 640px;
+  margin: 12px auto 0 auto;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
   font-size: 0.88rem;
-  color: var(--text-secondary);
+  line-height: 1.5;
+  text-align: center;
 }
 
-.status-banner.error {
-  color: var(--accent-red);
-  font-weight: 500;
-}
-
-/* rich media stream inspector card */
 .inspector-card {
   max-width: 740px;
   margin: 26px auto 0 auto;
@@ -332,7 +341,6 @@ body {
   box-shadow: var(--shadow-card);
   padding: 24px;
   text-align: left;
-  display: none;
 }
 
 .inspector-top {
@@ -359,6 +367,20 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  color: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .media-duration-pill {
@@ -451,38 +473,6 @@ body {
   opacity: 0.92;
 }
 
-/* inspector sub-tabs (Video Streams, Audio Tracks, Subtitles, Stream Info) */
-.inspector-tabs {
-  display: flex;
-  gap: 6px;
-  border-bottom: 1px solid var(--border-light);
-  margin: 16px 0 14px 0;
-  overflow-x: auto;
-}
-
-.inspector-tab-btn {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px;
-  font-size: 0.84rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  font-family: inherit;
-  transition: color 0.15s ease;
-}
-
-.inspector-tab-btn:hover {
-  color: var(--text-primary);
-}
-
-.inspector-tab-btn.active {
-  color: var(--accent-blue);
-  border-bottom-color: var(--accent-blue);
-}
-
 .stream-matrix-table {
   width: 100%;
   border-collapse: collapse;
@@ -526,6 +516,11 @@ body {
   margin-left: 6px;
 }
 
+.res-tag.audio-tag {
+  background: #f1f5f9;
+  color: #334155;
+}
+
 .table-dl-btn {
   display: inline-flex;
   align-items: center;
@@ -545,7 +540,16 @@ body {
   color: #ffffff;
 }
 
-/* descriptive paragraphs below search bar on the home view */
+.table-dl-btn.audio-dl-btn {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.table-dl-btn.audio-dl-btn:hover {
+  background: #0f172a;
+  color: #ffffff;
+}
+
 .seo-description-block {
   max-width: 680px;
   margin: 44px auto 0 auto;
@@ -563,7 +567,6 @@ body {
   margin-bottom: 0;
 }
 
-/* category filter bar on the Sites view (inspired by Projects.tsx filter pills) */
 .category-filter-bar {
   display: flex;
   justify-content: center;
@@ -597,7 +600,6 @@ body {
   border-color: var(--text-primary);
 }
 
-/* unified Sites grid (all platforms including Facebook, Instagram, YouTube, TikTok in one uniform grid) */
 .sites-section {
   margin-top: 12px;
 }
@@ -700,7 +702,6 @@ body {
 .site-icon-badge.green { background: #16a34a; }
 .site-icon-badge.purple { background: #7c3aed; }
 
-/* comprehensive legal document styling for Terms of Service & Privacy Policy */
 .legal-doc-wrapper {
   max-width: 740px;
   margin: 28px auto 0 auto;
@@ -722,10 +723,6 @@ body {
   color: var(--text-secondary);
 }
 
-.legal-meta-banner strong {
-  color: var(--text-primary);
-}
-
 .legal-clause-card {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
@@ -745,25 +742,8 @@ body {
   font-size: 0.9rem;
   color: var(--text-secondary);
   line-height: 1.68;
-  margin-bottom: 10px;
 }
 
-.legal-clause-card p:last-child {
-  margin-bottom: 0;
-}
-
-.legal-clause-card ul {
-  margin: 8px 0 4px 20px;
-  color: var(--text-secondary);
-  font-size: 0.88rem;
-  line-height: 1.65;
-}
-
-.legal-clause-card li {
-  margin-bottom: 6px;
-}
-
-/* pure white footer with a short centered divider line */
 .app-footer {
   background: var(--bg-primary);
   padding: 0 24px 36px 24px;
@@ -840,146 +820,4 @@ body {
   .unified-sites-grid {
     grid-template-columns: 1fr;
   }
-}
-
-/* subtle clear button inside the React search bar when text is entered */
-.omnibox-clear-btn {
-  background: none;
-  border: none;
-  color: #9aa0a6;
-  font-size: 1.25rem;
-  line-height: 1;
-  padding: 4px 8px;
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-
-.omnibox-clear-btn:hover {
-  color: var(--text-primary);
-}
-
-/* clean fallback artwork box if an external site blocks or lacks a thumbnail */
-.thumb-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-  color: #f8fafc;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-/* ready status badge and inline video preview toggle button inside InspectorCard */
-.status-ready-pill {
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
-  border-color: #bbf7d0;
-  font-weight: 600;
-}
-
-.btn-preview-toggle {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-  padding: 9px 15px;
-  border-radius: var(--radius-sm);
-  font-size: 0.84rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.btn-preview-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-/* 3-step professional workflow cards on the Home page */
-.workflow-grid {
-  max-width: 680px;
-  margin: 38px auto 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  text-align: left;
-}
-
-.workflow-card {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  padding: 18px;
-  box-shadow: var(--shadow-sm);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.workflow-card:hover {
-  border-color: var(--border-default);
-  box-shadow: var(--shadow-card);
-}
-
-.workflow-step-badge {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--accent-blue);
-  background: var(--accent-blue-soft);
-  padding: 2px 8px;
-  border-radius: 6px;
-  margin-bottom: 10px;
-}
-
-.workflow-card h4 {
-  font-size: 0.94rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 6px;
-}
-
-.workflow-card p {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  line-height: 1.55;
-}
-
-@media (max-width: 640px) {
-  .workflow-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* audio format badges in the unified video + audio table */
-.res-tag.audio-tag {
-  background: #f1f5f9;
-  color: #334155;
-}
-
-.table-dl-btn.audio-dl-btn {
-  background: #f1f5f9;
-  color: #0f172a;
-}
-
-.table-dl-btn.audio-dl-btn:hover {
-  background: #0f172a;
-  color: #ffffff;
-}
-
-/* polite inline apology notice displayed on the Home page if a stream cannot be downloaded */
-.apology-banner {
-  max-width: 640px;
-  margin: 12px auto 0 auto;
-  padding: 12px 18px;
-  border-radius: 10px;
-  background-color: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
-  font-size: 0.88rem;
-  line-height: 1.5;
-  text-align: center;
 }

@@ -1,4 +1,4 @@
-// custom O(1) LRU cache with automatic TTL expiration so memory usage stays bounded
+// O(1) LRU cache with TTL expiration to keep memory bounded
 class LruCache {
   constructor(maxEntries = 200, defaultTtlMs = 5 * 60 * 1000) {
     this.maxEntries = maxEntries;
@@ -15,7 +15,6 @@ class LruCache {
       return null;
     }
 
-    // refresh insertion order for LRU eviction
     this.store.delete(key);
     this.store.set(key, item);
     return item.value;

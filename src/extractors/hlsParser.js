@@ -1,7 +1,7 @@
 const { BROWSER_UA } = require('../config/constants');
 const { snapToStandardResolution, resolveAbsoluteUrl } = require('../utils/mediaFormatters');
 
-// parse an HLS (.m3u8) master playlist to discover the exact resolutions available in the stream
+// parse an HLS (.m3u8) master playlist to discover the exact resolutions inside the stream
 async function parseHlsMasterManifest(m3u8Url, refererUrl, cookieHeader) {
   const variants = {};
   try {
@@ -64,7 +64,7 @@ async function parseHlsMasterManifest(m3u8Url, refererUrl, cookieHeader) {
   return variants;
 }
 
-// pure-Node HLS segment downloader & pipe for serverless environments where ffmpeg is unavailable
+// pure-Node HLS segment downloader & pipe for serverless environments
 async function streamHlsSegmentsToResponse(variantM3u8Url, refererUrl, cookieHeader, res, filename) {
   const plRes = await fetch(variantM3u8Url, {
     headers: {

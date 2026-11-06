@@ -2,3 +2,5 @@ node_modules/
 temp/
 .vercel/
 .env
+*.log
+.DS_Store

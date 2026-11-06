@@ -5,7 +5,6 @@ export default function SitesView({ sitesCatalog, onSelectSite }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
-  // filter and sort all sites in strict alphabetical order
   const filteredSites = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return sitesCatalog

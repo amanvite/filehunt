@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { html } from './Icons.js';
 
-// build preparation endpoint URL with the video title attached
 function buildPrepareHref({ url, title, type = 'mp4', resolution = 720, bitrate = 192 }) {
   const params = new URLSearchParams({
     url,
@@ -15,7 +14,6 @@ function buildPrepareHref({ url, title, type = 'mp4', resolution = 720, bitrate 
 }
 
 export default function InspectorCard({ mediaData, sourceUrl, onDownloadApology }) {
-  // use ONLY the real video and audio formats discovered by /api/info for this specific video
   const videoFormats = Array.isArray(mediaData?.videoFormats)
     ? mediaData.videoFormats
     : (mediaData?.resolutions || []).map(r => ({
@@ -157,7 +155,6 @@ export default function InspectorCard({ mediaData, sourceUrl, onDownloadApology 
         </div>
       </div>
 
-      <!-- unified table showing ONLY the real verified Video (MP4) and Audio (MP3) qualities for this video -->
       <table className="stream-matrix-table" style=${{ marginTop: '14px' }}>
         <thead>
           <tr>

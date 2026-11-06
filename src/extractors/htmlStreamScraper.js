@@ -222,7 +222,7 @@ function findChildMediaPages(html, baseUrl) {
   return [...new Set(candidates)].slice(0, 4);
 }
 
-// probe direct MP4 streams to verify they are genuine video binaries and read their exact Content-Length
+// probe direct MP4 streams to verify they are genuine video binaries and read their Content-Length
 async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHeader) {
   const verified = {};
   const entries = Object.entries(directStreams);

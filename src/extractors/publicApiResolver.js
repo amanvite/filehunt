@@ -5,7 +5,7 @@ const {
   formatDuration
 } = require('../utils/mediaFormatters');
 
-// query YouTube InnerTube Player API directly in Node.js to get real per-video resolutions & streams
+// query YouTube InnerTube Player API directly to get real per-video resolutions & sizes
 async function resolveYouTubeInnerTube(targetUrl) {
   const ytMatch =
     targetUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ||
@@ -78,7 +78,9 @@ async function resolveYouTubeInnerTube(targetUrl) {
           const normRes = snapToStandardResolution(rawHeight);
           if (!normRes) return;
 
-          const sizeBytes = Number(f.contentLength) || (f.bitrate && durationSec ? Math.round((f.bitrate / 8) * durationSec) : null);
+          const sizeBytes =
+            Number(f.contentLength) ||
+            (f.bitrate && durationSec ? Math.round((f.bitrate / 8) * durationSec) : null);
           const hasAudio = Boolean(f.audioQuality);
 
           const existing = resolutionMap.get(normRes);

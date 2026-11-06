@@ -18,18 +18,23 @@ let resolvedYtDlpCmd = null;
 let ytdlpDownloadPromise = null;
 let resolvedFfmpegPath = null;
 
-// resolve optional local ffmpeg binary without triggering Vercel's static file tracer
+// check if system ffmpeg exists without requiring external npm packages
 function getLocalFfmpegPath() {
   if (IS_VERCEL) return null;
   if (resolvedFfmpegPath) return resolvedFfmpegPath;
-  try {
-    const dynamicRequire = eval('require');
-    const candidate = dynamicRequire('ffmpeg-static');
-    if (candidate && fs.existsSync(candidate)) {
-      resolvedFfmpegPath = candidate;
+
+  const winCandidates = [
+    path.join(TEMP_DIR, 'ffmpeg.exe'),
+    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\WinGet\\Links\\ffmpeg.exe')
+  ];
+
+  for (const c of winCandidates) {
+    if (c && fs.existsSync(c)) {
+      resolvedFfmpegPath = c;
       return resolvedFfmpegPath;
     }
-  } catch {}
+  }
   return null;
 }
 

@@ -1,6 +1,5 @@
 import { YouTubeIcon, InstagramIcon, FacebookIcon, TikTokIcon } from '../components/Icons.js';
 
-// unified platform and converter definitions for the Sites view
 export const CORE_SITES_DATA = [
   { name: 'youtube.com', label: 'YouTube', icon: YouTubeIcon, color: 'yt', category: 'social' },
   { name: 'instagram.com', label: 'Instagram', icon: InstagramIcon, color: 'ig', category: 'social' },

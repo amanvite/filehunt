@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CORE_SITES_DATA, createExtractorEntry } from '../data/sitesData.js';
 
-// custom React hook managing stream inspection, abort controllers, and extractor catalog hydration
 export function useMediaInspector() {
   const [urlInput, setUrlInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);

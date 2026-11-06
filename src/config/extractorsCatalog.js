@@ -1,4 +1,4 @@
-// canonical list of supported extractors sorted A-Z at runtime
+// canonical list of supported extractors sorted A-Z
 const BUILTIN_EXTRACTORS = [
   '1News', '9GAG', 'Abebony', 'ABC', 'AcademicEarth', 'AcFun', 'Archive.org', 'ARD', 'ArteTV',
   'Audiomack', 'Bandcamp', 'BBC', 'Beeg', 'Behance', 'Bilibili', 'BitChute', 'Bloomberg', 'Bluesky',

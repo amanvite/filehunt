@@ -1,7 +1,7 @@
 // unpack Dean Edwards packed JS: eval(function(p,a,c,k,e,d){...})
 function unpackDeanEdwards(html) {
   let unpackedChunks = '';
-  const packedRegex = /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\(\s*'([\s\S]*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\|'\)/gi;
+  const packedRegex = /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\(\s*'([\s\S]*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\Vert{}'\)/gi;
   let match;
   while ((match = packedRegex.exec(html)) !== null) {
     try {
@@ -46,7 +46,7 @@ function decodeInlineBase64Urls(text) {
   return decodedExtras;
 }
 
-// decode KVS (Kernel Video Sharing / kt_player) "function/0/..." obfuscated URLs
+// decode KVS (kt_player) "function/0/..." obfuscated URLs
 function decodeKvsUrl(rawUrl, licenseCode) {
   if (!rawUrl) return '';
   if (!rawUrl.startsWith('function/0/')) return rawUrl;

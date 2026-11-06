@@ -1,45 +1,93 @@
-// custom O(1) LRU cache with automatic TTL expiration so memory usage stays bounded
-class LruCache {
-  constructor(maxEntries = 200, defaultTtlMs = 5 * 60 * 1000) {
-    this.maxEntries = maxEntries;
-    this.defaultTtlMs = defaultTtlMs;
-    this.store = new Map();
-  }
+const { STANDARD_HEIGHTS } = require('../config/constants');
 
-  get(key) {
-    const item = this.store.get(key);
-    if (!item) return null;
+// snap non-standard heights (e.g. 1072 -> 1080) to standard labels
+function snapToStandardResolution(rawHeight) {
+  const n = Number(rawHeight);
+  if (!n || isNaN(n) || n < 100) return null;
+  if (STANDARD_HEIGHTS.includes(n)) return n;
+  return STANDARD_HEIGHTS.reduce((prev, curr) =>
+    Math.abs(curr - n) < Math.abs(prev - n) ? curr : prev
+  );
+}
 
-    if (Date.now() > item.expiresAt) {
-      this.store.delete(key);
-      return null;
+function formatBytes(bytes) {
+  const b = Number(bytes);
+  if (!b || isNaN(b) || b <= 0) return null;
+  const mb = b / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+}
+
+function formatDuration(sec) {
+  if (!sec || isNaN(sec) || sec <= 0) return null;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
+    .trim();
+}
+
+function humanizeUrlSlug(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    const segments = parsed.pathname
+      .split('/')
+      .map(s => s.trim())
+      .filter(s => s && !/^(video|videos|watch|look|out|go|v|embed|en|de|fr|es|\d+)$/i.test(s));
+
+    const bestSegment = segments.sort((a, b) => b.length - a.length)[0];
+    if (bestSegment && bestSegment.length > 2) {
+      return decodeURIComponent(bestSegment)
+        .replace(/\.(html|php|htm|mp4)$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .trim();
     }
-
-    // refresh insertion order for LRU eviction
-    this.store.delete(key);
-    this.store.set(key, item);
-    return item.value;
-  }
-
-  set(key, value, ttlMs = this.defaultTtlMs) {
-    if (this.store.has(key)) {
-      this.store.delete(key);
-    } else if (this.store.size >= this.maxEntries) {
-      const oldestKey = this.store.keys().next().value;
-      if (oldestKey !== undefined) {
-        this.store.delete(oldestKey);
-      }
-    }
-
-    this.store.set(key, {
-      value,
-      expiresAt: Date.now() + ttlMs
-    });
-  }
-
-  delete(key) {
-    this.store.delete(key);
+    return `Video on ${parsed.hostname.replace(/^www\./, '')}`;
+  } catch {
+    return 'Video Stream';
   }
 }
 
-module.exports = { LruCache };
+// clean video title so downloaded files use the real video name
+function sanitizeFilename(rawTitle, suffix = '', ext = 'mp4') {
+  const cleaned = decodeHtmlEntities(rawTitle || 'Video')
+    .replace(/[\u0000-\u001f"<>|:*?\\/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 85);
+
+  const base = cleaned || 'Video_Stream';
+  const tag = suffix ? `_${suffix}` : '';
+  return `${base}${tag}.${ext}`;
+}
+
+function resolveAbsoluteUrl(maybeRelative, baseUrl) {
+  if (!maybeRelative) return '';
+  try {
+    return new URL(maybeRelative, baseUrl).href;
+  } catch {
+    return '';
+  }
+}
+
+module.exports = {
+  snapToStandardResolution,
+  formatBytes,
+  formatDuration,
+  decodeHtmlEntities,
+  humanizeUrlSlug,
+  sanitizeFilename,
+  resolveAbsoluteUrl
+};
