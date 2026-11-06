@@ -1,6 +1,6 @@
 {
   "name": "filehunt",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "FileHunt - Modular Universal Media Stream Inspector & Downloader",
   "main": "server.js",
   "scripts": {
@@ -10,5 +10,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "express": "^4.21.2"
+  }
 }
