@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { IS_VERCEL, TEMP_DIR, BROWSER_UA, DEFAULT_AGE_COOKIES } = require('../config/constants');
+const { TEMP_DIR, BROWSER_UA, DEFAULT_AGE_COOKIES } = require('../config/constants');
 const { LruCache } = require('../utils/lruCache');
 const { sanitizeFilename } = require('../utils/mediaFormatters');
 const { resolveViaPublicPlatformApis } = require('../extractors/publicApiResolver');
@@ -10,6 +10,23 @@ const { getLocalFfmpegPath, runYtDlp, inspectViaYtDlp } = require('../extractors
 
 const sessionCache = new LruCache(250, 10 * 60 * 1000);
 const preparedTokens = new LruCache(250, 15 * 60 * 1000);
+
+// encode a stateless token so any Vercel serverless instance can stream the file even on a cold start
+function encodeStatelessToken(payloadObj) {
+  try {
+    return Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+  } catch {
+    return '';
+  }
+}
+
+function decodeStatelessToken(rawToken) {
+  try {
+    return JSON.parse(Buffer.from(rawToken, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
 
 async function inspectMediaUrl(rawUrl) {
   const parsed = new URL(rawUrl.trim());
@@ -36,23 +53,23 @@ async function inspectMediaUrl(rawUrl) {
     }
   } catch {}
 
-  // Tier 2: Local yt-dlp format inspection (when running on localhost)
-  if (!IS_VERCEL) {
-    try {
-      const ytData = await inspectViaYtDlp(targetUrl);
-      if (ytData && ytData.videoFormats?.length > 0) {
-        sessionCache.set(targetUrl, ytData);
-        return ytData;
-      }
-    } catch {}
-  }
+  // Tier 2: Deep HTML / KVS / xPlayer / Packed JS / Child Iframe / HLS Scraper (fast on both Vercel & Local)
+  try {
+    const deepData = await scrapePageDeep(targetUrl);
+    if (deepData && deepData.videoFormats?.length > 0) {
+      sessionCache.set(targetUrl, deepData);
+      return deepData;
+    }
+  } catch {}
 
-  // Tier 3: Deep HTML / KVS / Packed JS / Child Iframe / HLS Manifest Scraper
-  const deepData = await scrapePageDeep(targetUrl);
-  if (deepData && deepData.videoFormats?.length > 0) {
-    sessionCache.set(targetUrl, deepData);
-    return deepData;
-  }
+  // Tier 3: Standalone yt-dlp inspection (works on BOTH Localhost Windows and Vercel Linux /tmp!)
+  try {
+    const ytData = await inspectViaYtDlp(targetUrl);
+    if (ytData && ytData.videoFormats?.length > 0) {
+      sessionCache.set(targetUrl, ytData);
+      return ytData;
+    }
+  } catch {}
 
   return null;
 }
@@ -69,7 +86,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
   const refererToUse = session.finalPageUrl || url;
   const targetResNum = Number(resolution);
 
-  // 1. Verified direct MP4 stream
+  // 1. Direct MP4 stream (uses both in-memory token AND stateless token for Vercel multi-instance safety)
   if (type !== 'mp3') {
     const directMap = session.verifiedDirectMap || {};
     const availableRes = Object.keys(directMap).map(Number).sort((a, b) => b - a);
@@ -77,99 +94,100 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     const chosenDirect = chosenRes ? directMap[chosenRes] : null;
 
     if (chosenDirect?.url && !/\.m3u8(\?|$)/i.test(chosenDirect.url)) {
-      const token = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      preparedTokens.set(token, {
+      const payload = {
         mode: 'direct',
         streamUrl: chosenDirect.url,
         referer: refererToUse,
         cookies: sessionCookies,
         filename: cleanFilename,
         ext
-      });
-      return { ok: true, token, filename: cleanFilename };
+      };
+      const token = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      preparedTokens.set(token, payload);
+      const st = encodeStatelessToken(payload);
+      return { ok: true, token, st, filename: cleanFilename };
     }
   }
 
-  // 2. Local yt-dlp download & muxing
-  if (!IS_VERCEL) {
-    const ffmpegBin = getLocalFfmpegPath();
-    const hlsVariant = session.hlsVariantsByRes?.[targetResNum]?.url;
-    const directFallback = Object.values(session.verifiedDirectMap || {})[0]?.url;
+  // 2. Standalone yt-dlp download (runs on both Localhost and Vercel /tmp)
+  const ffmpegBin = getLocalFfmpegPath();
+  const hlsVariant = session.hlsVariantsByRes?.[targetResNum]?.url;
+  const directFallback = Object.values(session.verifiedDirectMap || {})[0]?.url;
 
-    const candidates = [
-      ...new Set(
-        [
-          hlsVariant,
-          url,
-          session.finalPageUrl,
-          ...(session.childPages || []),
-          ...(session.hlsStreams || []),
-          directFallback
-        ].filter(Boolean)
-      )
-    ];
+  const candidates = [
+    ...new Set(
+      [
+        hlsVariant,
+        url,
+        session.finalPageUrl,
+        ...(session.childPages || []),
+        ...(session.hlsStreams || []),
+        directFallback
+      ].filter(Boolean)
+    )
+  ];
 
-    for (const targetToRun of candidates) {
-      try {
-        const jobId = `fh_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        const outTemplate = path.join(TEMP_DIR, `${jobId}.%(ext)s`);
-        const args = [
-          '--no-playlist',
-          '--no-part',
-          '--no-warnings',
-          '--no-check-certificates',
-          '--referer',
-          refererToUse,
-          '--user-agent',
-          BROWSER_UA,
-          '--add-header',
-          `Cookie:${sessionCookies}`,
-          '-o',
-          outTemplate
-        ];
+  for (const targetToRun of candidates) {
+    try {
+      const jobId = `fh_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const outTemplate = path.join(TEMP_DIR, `${jobId}.%(ext)s`);
+      const args = [
+        '--no-playlist',
+        '--no-part',
+        '--no-warnings',
+        '--no-check-certificates',
+        '--geo-bypass',
+        '--referer',
+        refererToUse,
+        '--user-agent',
+        BROWSER_UA,
+        '--add-header',
+        `Cookie:${sessionCookies}`,
+        '-o',
+        outTemplate
+      ];
 
-        if (type === 'mp3') {
-          args.push('-f', 'bestaudio/best');
-          if (ffmpegBin) {
-            args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', `${bitrate}K`);
-          }
+      if (type === 'mp3') {
+        args.push('-f', 'bestaudio/best');
+        if (ffmpegBin) {
+          args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', `${bitrate}K`);
+        }
+      } else {
+        const formatSelector = ffmpegBin
+          ? `bestvideo[height<=${targetResNum}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=${targetResNum}][ext=mp4]/bestvideo[height<=${targetResNum}]+bestaudio/best[height<=${targetResNum}]/best`
+          : `best[height<=${targetResNum}][ext=mp4]/best[ext=mp4]/best`;
+
+        args.push('-f', formatSelector);
+        if (ffmpegBin) {
+          args.push('--merge-output-format', 'mp4');
+        }
+      }
+
+      args.push(targetToRun);
+      await runYtDlp(args, 50000);
+
+      const produced = fs
+        .readdirSync(TEMP_DIR)
+        .filter(f => f.startsWith(jobId) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
+
+      if (produced.length > 0) {
+        const fullPath = path.join(TEMP_DIR, produced[0]);
+        const stat = fs.statSync(fullPath);
+        if (stat.size > 25000) {
+          const actualExt = path.extname(produced[0]).replace('.', '') || ext;
+          const finalDownloadName = sanitizeFilename(title, suffix, actualExt);
+          const token = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          preparedTokens.set(token, {
+            mode: 'file',
+            filePath: fullPath,
+            filename: finalDownloadName
+          });
+          return { ok: true, token, filename: finalDownloadName };
         } else {
-          const formatSelector = ffmpegBin
-            ? `bestvideo[height<=${targetResNum}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=${targetResNum}][ext=mp4]/bestvideo[height<=${targetResNum}]+bestaudio/best[height<=${targetResNum}]/best`
-            : `best[height<=${targetResNum}][ext=mp4]/best[ext=mp4]/best`;
-
-          args.push('-f', formatSelector);
-          if (ffmpegBin) {
-            args.push('--merge-output-format', 'mp4');
-          }
+          fs.unlink(fullPath, () => {});
         }
-
-        args.push(targetToRun);
-        await runYtDlp(args, 240000);
-
-        const produced = fs
-          .readdirSync(TEMP_DIR)
-          .filter(f => f.startsWith(jobId) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
-
-        if (produced.length > 0) {
-          const fullPath = path.join(TEMP_DIR, produced[0]);
-          const stat = fs.statSync(fullPath);
-          if (stat.size > 25000) {
-            const actualExt = path.extname(produced[0]).replace('.', '') || ext;
-            const finalDownloadName = sanitizeFilename(title, suffix, actualExt);
-            const token = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            preparedTokens.set(token, {
-              mode: 'file',
-              filePath: fullPath,
-              filename: finalDownloadName
-            });
-            return { ok: true, token, filename: finalDownloadName };
-          } else {
-            fs.unlink(fullPath, () => {});
-          }
-        }
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   // 3. Pure-Node HLS (.m3u8) segment streamer fallback
@@ -179,26 +197,34 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     (session.hlsStreams || [])[0];
 
   if (hlsVariantUrl) {
-    const token = `hls_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    preparedTokens.set(token, {
+    const payload = {
       mode: 'hls',
       streamUrl: hlsVariantUrl,
       referer: refererToUse,
       cookies: sessionCookies,
       filename: cleanFilename
-    });
-    return { ok: true, token, filename: cleanFilename };
+    };
+    const token = `hls_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    preparedTokens.set(token, payload);
+    const st = encodeStatelessToken(payload);
+    return { ok: true, token, st, filename: cleanFilename };
   }
 
   return { ok: false };
 }
 
-function consumePreparedToken(token) {
-  const entry = preparedTokens.get(token);
-  if (entry) {
-    preparedTokens.delete(token);
+function consumePreparedToken(token, st) {
+  if (token) {
+    const entry = preparedTokens.get(token);
+    if (entry) {
+      preparedTokens.delete(token);
+      return entry;
+    }
   }
-  return entry;
+  if (st) {
+    return decodeStatelessToken(st);
+  }
+  return null;
 }
 
 module.exports = {

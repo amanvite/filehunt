@@ -12,6 +12,7 @@
       urlInput,
       setUrlInput,
       isLoading,
+      loadingStage,
       apologyText,
       setApologyText,
       mediaData,
@@ -132,20 +133,23 @@
                 <div className=${`progress-track ${isLoading ? 'active' : ''}`}>
                   <div className="progress-fill"></div>
                 </div>
-                ${mediaData && FH.InspectorCard && html`
+                ${isLoading && loadingStage && html`
+                  <div className="stage-status-pill">${loadingStage}</div>
+                `}
+                ${apologyText && html`
+                  <div className="apology-banner">
+                    ${apologyText}
+                  </div>
+                `}
+              </div>
+
+              ${mediaData && FH.InspectorCard && html`
                 <${FH.InspectorCard}
                   mediaData=${mediaData}
                   sourceUrl=${inspectedUrl}
                   onDownloadApology=${msg => setApologyText(msg)}
                 />
               `}
-              </div>
-
-              <${FH.InspectorCard}
-                mediaData=${mediaData}
-                sourceUrl=${inspectedUrl}
-                onDownloadApology=${msg => setApologyText(msg)}
-              />
 
               <div className="seo-description-block">
                 <p>

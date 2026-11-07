@@ -5,6 +5,7 @@
   FH.useMediaInspector = function () {
     const [urlInput, setUrlInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [loadingStage, setLoadingStage] = useState('');
     const [apologyText, setApologyText] = useState('');
     const [mediaData, setMediaData] = useState(null);
     const [inspectedUrl, setInspectedUrl] = useState('');
@@ -55,8 +56,13 @@
       abortControllerRef.current = controller;
 
       setIsLoading(true);
+      setLoadingStage('Connecting to media source & inspecting available streams...');
       setApologyText('');
       setMediaData(null);
+
+      const stageTimer = setTimeout(() => {
+        setLoadingStage('Deep-scanning video qualities & H.264 stream tracks...');
+      }, 2800);
 
       try {
         const res = await fetch('/api/info', {
@@ -76,10 +82,14 @@
           );
         }
 
-        if (!res.ok || data.error) {
+        const hasStreams =
+          (Array.isArray(data?.videoFormats) && data.videoFormats.length > 0) ||
+          (Array.isArray(data?.resolutions) && data.resolutions.length > 0);
+
+        if (!res.ok || data?.error || !hasStreams) {
           setApologyText(
-            data.error ||
-              'We apologize, but FileHunt is unable to process this link right now. Please verify the URL and try again.'
+            data?.error ||
+              'We apologize, but FileHunt could not find any downloadable video streams on this link. Please verify that the URL points directly to a public video.'
           );
           return false;
         }
@@ -95,7 +105,9 @@
         );
         return false;
       } finally {
+        clearTimeout(stageTimer);
         setIsLoading(false);
+        setLoadingStage('');
       }
     }, []);
 
@@ -105,12 +117,14 @@
       setMediaData(null);
       setApologyText('');
       setIsLoading(false);
+      setLoadingStage('');
     }, []);
 
     return {
       urlInput,
       setUrlInput,
       isLoading,
+      loadingStage,
       apologyText,
       setApologyText,
       mediaData,

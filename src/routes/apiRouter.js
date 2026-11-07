@@ -12,21 +12,18 @@ const {
 async function handleApiRequest(req, res) {
   const route = req.pathname || req.path;
 
-  // GET /api/health
   if (req.method === 'GET' && (route === '/api/health' || route === '/health')) {
     return res.json({
       status: 'ok',
-      version: '4.0.0',
+      version: '4.2.0',
       runtime: IS_VERCEL ? 'vercel-serverless' : 'local-node'
     });
   }
 
-  // GET /api/extractors
   if (req.method === 'GET' && (route === '/api/extractors' || route === '/extractors')) {
     return res.json({ extractors: BUILTIN_EXTRACTORS });
   }
 
-  // GET /api/proxy-image
   if (req.method === 'GET' && (route === '/api/proxy-image' || route === '/proxy-image')) {
     const { url } = req.query || {};
     if (!url) return res.status(400).send('');
@@ -59,7 +56,6 @@ async function handleApiRequest(req, res) {
     }
   }
 
-  // POST /api/info
   if (req.method === 'POST' && (route === '/api/info' || route === '/info')) {
     const { url } = req.body || {};
     if (!url) {
@@ -96,17 +92,16 @@ async function handleApiRequest(req, res) {
     });
   }
 
-  // GET /api/download
   if (req.method === 'GET' && (route === '/api/download' || route === '/download')) {
-    const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192', prepare, token } = req.query || {};
+    const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192', prepare, token, st } = req.query || {};
 
-    if (token) {
-      const entry = consumePreparedToken(token);
+    if (token || st) {
+      const entry = consumePreparedToken(token, st);
       if (!entry) {
         return res.redirect('/?apology=1');
       }
 
-      if (entry.mode === 'file' && fs.existsSync(entry.filePath)) {
+      if (entry.mode === 'file' && entry.filePath && fs.existsSync(entry.filePath)) {
         const stat = fs.statSync(entry.filePath);
         res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
         res.setHeader('Content-Type', entry.filename.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4');
@@ -141,7 +136,11 @@ async function handleApiRequest(req, res) {
             if (contentLen) res.setHeader('Content-Length', String(contentLen));
             return Readable.fromWeb(upstream.body).pipe(res);
           }
-        } catch {}
+          // if CDN is IP-bound to the client browser, redirect directly to the stream
+          return res.redirect(entry.streamUrl);
+        } catch {
+          return res.redirect(entry.streamUrl);
+        }
       }
 
       if (entry.mode === 'hls') {
@@ -169,9 +168,11 @@ async function handleApiRequest(req, res) {
 
     if (prepare === '1') {
       if (result.ok) {
+        const dlQuery = new URLSearchParams({ token: result.token });
+        if (result.st) dlQuery.set('st', result.st);
         return res.json({
           ok: true,
-          downloadUrl: `/api/download?token=${encodeURIComponent(result.token)}`,
+          downloadUrl: `/api/download?${dlQuery.toString()}`,
           filename: result.filename
         });
       }
@@ -183,7 +184,9 @@ async function handleApiRequest(req, res) {
     }
 
     if (result.ok) {
-      return res.redirect(`/api/download?token=${encodeURIComponent(result.token)}`);
+      const dlQuery = new URLSearchParams({ token: result.token });
+      if (result.st) dlQuery.set('st', result.st);
+      return res.redirect(`/api/download?${dlQuery.toString()}`);
     }
 
     return res.redirect('/?apology=1');

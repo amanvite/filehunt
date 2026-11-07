@@ -821,3 +821,11 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.stage-status-pill {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}

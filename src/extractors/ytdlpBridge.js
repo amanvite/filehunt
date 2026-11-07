@@ -9,16 +9,20 @@ const {
   humanizeUrlSlug
 } = require('../utils/mediaFormatters');
 
-const LOCAL_YTDLP_BIN = path.join(
-  TEMP_DIR,
-  process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
-);
+// use standalone yt-dlp.exe on Windows and standalone compiled yt-dlp_linux on Vercel/Linux
+const BINARY_FILENAME =
+  process.platform === 'win32'
+    ? 'yt-dlp.exe'
+    : process.arch === 'arm64'
+    ? 'yt-dlp_linux_aarch64'
+    : 'yt-dlp_linux';
+
+const LOCAL_YTDLP_BIN = path.join(TEMP_DIR, BINARY_FILENAME);
 
 let resolvedYtDlpCmd = null;
 let ytdlpDownloadPromise = null;
 let resolvedFfmpegPath = null;
 
-// check if system ffmpeg exists without requiring external npm packages
 function getLocalFfmpegPath() {
   if (IS_VERCEL) return null;
   if (resolvedFfmpegPath) return resolvedFfmpegPath;
@@ -38,42 +42,43 @@ function getLocalFfmpegPath() {
   return null;
 }
 
+// bootstrap standalone yt-dlp binary on BOTH Localhost (Windows) and Vercel (/tmp/filehunt_temp/yt-dlp_linux)
 async function ensureYtDlpBinary() {
-  if (IS_VERCEL) return null;
-
   if (resolvedYtDlpCmd && (resolvedYtDlpCmd === 'yt-dlp' || fs.existsSync(resolvedYtDlpCmd))) {
     return resolvedYtDlpCmd;
   }
 
-  if (fs.existsSync(LOCAL_YTDLP_BIN) && fs.statSync(LOCAL_YTDLP_BIN).size > 1000000) {
-    resolvedYtDlpCmd = LOCAL_YTDLP_BIN;
-    return resolvedYtDlpCmd;
-  }
-
-  const hasGlobal = await new Promise(resolve => {
-    try {
-      const p = spawn('yt-dlp', ['--version']);
-      p.on('error', () => resolve(false));
-      p.on('close', code => resolve(code === 0));
-    } catch {
-      resolve(false);
+  try {
+    if (fs.existsSync(LOCAL_YTDLP_BIN) && fs.statSync(LOCAL_YTDLP_BIN).size > 5000000) {
+      resolvedYtDlpCmd = LOCAL_YTDLP_BIN;
+      return resolvedYtDlpCmd;
     }
-  });
+  } catch {}
 
-  if (hasGlobal) {
-    resolvedYtDlpCmd = 'yt-dlp';
-    return resolvedYtDlpCmd;
+  if (!IS_VERCEL) {
+    const hasGlobal = await new Promise(resolve => {
+      try {
+        const p = spawn('yt-dlp', ['--version']);
+        p.on('error', () => resolve(false));
+        p.on('close', code => resolve(code === 0));
+      } catch {
+        resolve(false);
+      }
+    });
+
+    if (hasGlobal) {
+      resolvedYtDlpCmd = 'yt-dlp';
+      return resolvedYtDlpCmd;
+    }
   }
 
   if (!ytdlpDownloadPromise) {
     ytdlpDownloadPromise = (async () => {
-      const releaseUrl =
-        process.platform === 'win32'
-          ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-          : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
-
-      console.log('Downloading standalone yt-dlp binary into temp/ folder...');
-      const res = await fetch(releaseUrl, { redirect: 'follow' });
+      const releaseUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${BINARY_FILENAME}`;
+      const res = await fetch(releaseUrl, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000)
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const buffer = Buffer.from(await res.arrayBuffer());
@@ -93,13 +98,11 @@ async function ensureYtDlpBinary() {
 }
 
 function initLocalBinaries() {
-  if (!IS_VERCEL) {
-    getLocalFfmpegPath();
-    ensureYtDlpBinary();
-  }
+  getLocalFfmpegPath();
+  ensureYtDlpBinary();
 }
 
-async function runYtDlp(args, timeoutMs = 180000) {
+async function runYtDlp(args, timeoutMs = 45000) {
   const cmd = await ensureYtDlpBinary();
   if (!cmd) throw new Error('yt-dlp binary unavailable');
   const ffmpegBin = getLocalFfmpegPath();
@@ -139,7 +142,7 @@ async function runYtDlp(args, timeoutMs = 180000) {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        if (code === 0) resolve(stdout);
+        if (code === 0 && stdout.trim()) resolve(stdout);
         else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
       }
     });
@@ -147,8 +150,8 @@ async function runYtDlp(args, timeoutMs = 180000) {
 }
 
 async function inspectViaYtDlp(targetUrl) {
-  if (IS_VERCEL) return null;
   const parsed = new URL(targetUrl);
+  const cleanHost = parsed.hostname.replace(/^www\./, '').toUpperCase();
 
   const rawJson = await runYtDlp(
     [
@@ -156,6 +159,7 @@ async function inspectViaYtDlp(targetUrl) {
       '--no-playlist',
       '--no-warnings',
       '--no-check-certificates',
+      '--geo-bypass',
       '--referer',
       parsed.origin + '/',
       '--user-agent',
@@ -182,17 +186,15 @@ async function inspectViaYtDlp(targetUrl) {
       }
     }
 
-    if (f.vcodec && f.vcodec !== 'none' && (f.height || f.format_note)) {
-      const noteMatch = String(f.format_note || '').match(/^(\d{3,4})p/);
-      const rawDim = noteMatch
+    if (f.vcodec && f.vcodec !== 'none' && (f.height || f.format_note || f.url)) {
+      const noteMatch = String(f.format_note || f.format_id || '').match(/(\d{3,4})p?/);
+      const rawDim = f.height
+        ? (f.width ? Math.min(f.width, f.height) : f.height)
+        : noteMatch
         ? Number(noteMatch[1])
-        : f.width && f.height
-        ? Math.min(f.width, f.height)
-        : f.height;
+        : 720;
 
-      const res = snapToStandardResolution(rawDim);
-      if (!res) return;
-
+      const res = snapToStandardResolution(rawDim) || 720;
       const sizeBytes =
         f.filesize ||
         f.filesize_approx ||
@@ -213,9 +215,9 @@ async function inspectViaYtDlp(targetUrl) {
       }
 
       if (f.url && /^https?:\/\//i.test(f.url)) {
-        if (/\.m3u8(\?|$)/i.test(f.url)) {
+        if (/\.m3u8(\?|$)/i.test(f.url) || f.protocol?.includes('m3u8')) {
           hlsStreams.push(f.url);
-        } else if (f.acodec && f.acodec !== 'none') {
+        } else {
           directStreams[res] = { url: f.url, filesize: sizeBytes };
         }
       }
@@ -251,11 +253,16 @@ async function inspectViaYtDlp(targetUrl) {
     desc: rate >= 256 ? 'MP3 High Bitrate Audio' : rate >= 160 ? 'MP3 Standard Stereo Audio' : 'MP3 Compact Audio'
   }));
 
+  // replace generic yt-dlp extractor names like HTML5MediaEmbed with the actual website domain
+  const rawExtractor = info.extractor_key || info.extractor || '';
+  const friendlyExtractor =
+    !rawExtractor || /html5|generic/i.test(rawExtractor) ? cleanHost : rawExtractor;
+
   return {
-    title: info.title || humanizeUrlSlug(targetUrl),
-    extractor: info.extractor_key || info.extractor || parsed.hostname.replace(/^www\./, ''),
+    title: String(info.title || humanizeUrlSlug(targetUrl)).replace(/\s*\(\d+\)\s*$/, '').trim(),
+    extractor: friendlyExtractor,
     uploader: info.uploader || info.channel || null,
-    duration: formatDuration(durationSec) || 'Video',
+    duration: formatDuration(durationSec) || 'HD Video',
     thumbnail: info.thumbnail || '',
     resolutions: videoFormats.map(v => v.resolution),
     videoFormats,

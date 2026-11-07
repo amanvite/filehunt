@@ -37,6 +37,27 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
 
   const fullText = unescaped + '\n' + urlDecodedExtras;
 
+  // 0. OpenGraph & Twitter stream meta tags + <link rel="preload" as="video">
+  const metaStreamRegex = /<meta[^>]+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["'][^>]+content=["']([^"']+)["']/gi;
+  let metaMatch;
+  while ((metaMatch = metaStreamRegex.exec(fullText)) !== null) {
+    const mUrl = resolveAbsoluteUrl(metaMatch[1].trim(), baseUrl);
+    if (mUrl && /^https?:\/\//i.test(mUrl) && !/\.(swf|html|php)(\?|$)/i.test(mUrl)) {
+      if (/\.m3u8(\?|$)/i.test(mUrl)) hlsStreams.push(mUrl);
+      else if (!directStreams[720]) directStreams[720] = mUrl;
+    }
+  }
+
+  const preloadVideoRegex = /<link[^>]+as=["']video["'][^>]+href=["']([^"']+)["']/gi;
+  let plMatch;
+  while ((plMatch = preloadVideoRegex.exec(fullText)) !== null) {
+    const pUrl = resolveAbsoluteUrl(plMatch[1].trim(), baseUrl);
+    if (pUrl && /^https?:\/\//i.test(pUrl)) {
+      if (/\.m3u8(\?|$)/i.test(pUrl)) hlsStreams.push(pUrl);
+      else if (!directStreams[720]) directStreams[720] = pUrl;
+    }
+  }
+
   // 1. XVideos / XNXX html5player signatures
   const xvHigh = fullText.match(/setVideoUrlHigh\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvLow = fullText.match(/setVideoUrlLow\(\s*['"]([^'"]+)['"]\s*\)/i);
@@ -67,7 +88,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 4. xHamster & mirror domains window.initials
+  // 4. xHamster & mirror domains (xhaccess.com, xhamster46.desi, etc.) window.initials & xplayerSettings
   const initialsMatch = fullText.match(/window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
   if (initialsMatch) {
     try {
@@ -76,16 +97,25 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
         initials?.xplayerSettings?.sources?.standard?.h264 ||
         initials?.xplayerSettings?.sources?.standard?.mp4 ||
         initials?.videoModel?.sources?.mp4 ||
+        initials?.videoEntity?.sources?.mp4 ||
         [];
 
       if (Array.isArray(mp4Sources)) {
         mp4Sources.forEach(item => {
           const u = item?.url || item?.fallback;
-          const q = snapToStandardResolution(parseInt(String(item?.quality || item?.label || '720'), 10));
-          if (u && q && !/\.m3u8(\?|$)/i.test(u)) {
+          const q = snapToStandardResolution(parseInt(String(item?.quality || item?.label || '720'), 10)) || 720;
+          if (u && !/\.m3u8(\?|$)/i.test(u)) {
             directStreams[q] = resolveAbsoluteUrl(u, baseUrl);
           } else if (u && /\.m3u8(\?|$)/i.test(u)) {
             hlsStreams.push(resolveAbsoluteUrl(u, baseUrl));
+          }
+        });
+      } else if (mp4Sources && typeof mp4Sources === 'object') {
+        Object.entries(mp4Sources).forEach(([k, val]) => {
+          const u = typeof val === 'string' ? val : val?.url;
+          const q = snapToStandardResolution(parseInt(k, 10)) || 720;
+          if (u && !/\.m3u8(\?|$)/i.test(u)) {
+            directStreams[q] = resolveAbsoluteUrl(u, baseUrl);
           }
         });
       }
@@ -126,8 +156,32 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 6. Generic JWPlayer / FluidPlayer / Plyr / VideoJS / Motherless properties
-  const playerPropRegex = /(?:__fileurl|file|src|video_url|mp4_url|stream_url|contentUrl|hq_video_file|normal_video_file)\s*[:=]\s*['"](https?:\/\/[^'"\s<>]+)['"]/gi;
+  // 6. HTML5MediaEmbed equivalent: capture ANY <video src="..."> and <source src="..."> regardless of file extension
+  const html5VideoTagRegex = /<(?:video|source)[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi;
+  let vMatch;
+  while ((vMatch = html5VideoTagRegex.exec(fullText)) !== null) {
+    const rawSrc = vMatch[1].trim();
+    if (!rawSrc || rawSrc.startsWith('blob:') || rawSrc.startsWith('data:')) continue;
+    const srcUrl = resolveAbsoluteUrl(rawSrc, baseUrl);
+    if (!/^https?:\/\//i.test(srcUrl)) continue;
+    if (/\.(jpg|jpeg|png|webp|gif|svg|css|js|vtt|srt)(\?|$)/i.test(srcUrl)) continue;
+
+    if (/\.m3u8(\?|$)/i.test(srcUrl)) {
+      hlsStreams.push(srcUrl);
+      continue;
+    }
+
+    const labelMatch =
+      vMatch[0].match(/(?:label|title|res|data-res|size)=["']?(2160|1440|1080|720|480|360|240|144)p?/i) ||
+      srcUrl.match(/[_/-](2160|1440|1080|720|480|360|240|144)p?\b/i);
+    const res = labelMatch ? Number(labelMatch[1]) : !directStreams[720] ? 720 : 480;
+    if (!directStreams[res]) {
+      directStreams[res] = srcUrl;
+    }
+  }
+
+  // 7. Generic JWPlayer / FluidPlayer / Plyr / VideoJS / JSON-LD contentUrl properties
+  const playerPropRegex = /(?:__fileurl|file|src|video_url|mp4_url|stream_url|contentUrl|embedUrl|hq_video_file|normal_video_file)\s*[:=]\s*['"](https?:\/\/[^'"\s<>]+)['"]/gi;
   let pMatch;
   while ((pMatch = playerPropRegex.exec(fullText)) !== null) {
     const candidate = pMatch[1];
@@ -136,37 +190,11 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
 
     if (/\.m3u8(\?|$)/i.test(candidate)) {
       hlsStreams.push(candidate);
-    } else if (/\.(mp4|webm|m4v|mov)(\?|$)|\/get_file\/|\/stream\/|\/mp4\//i.test(candidate)) {
+    } else if (/\.(mp4|webm|m4v|mov)(\?|$)|\/get_file\/|\/stream\/|\/mp4\/|\/videos?\//i.test(candidate)) {
       const resHit = candidate.match(/[_/-](2160|1440|1080|720|480|360|240|144)p?\b/i);
       const resKey = resHit ? Number(resHit[1]) : 720;
       if (!directStreams[resKey]) {
         directStreams[resKey] = candidate;
-      }
-    }
-  }
-
-  // 7. <source>, <video>, and data-video / data-mp4 attributes
-  const mediaTagRegex = /<(?:source|video|div|a)[^>]+(?:src|data-src|data-video|data-mp4|data-url)=["']([^"']+)["'][^>]*>/gi;
-  let m;
-  while ((m = mediaTagRegex.exec(fullText)) !== null) {
-    const rawSrc = m[1].trim();
-    if (!rawSrc || rawSrc.startsWith('blob:') || rawSrc.startsWith('#')) continue;
-    const srcUrl = resolveAbsoluteUrl(rawSrc, baseUrl);
-    if (!/^https?:\/\//i.test(srcUrl)) continue;
-    if (/\.(jpg|jpeg|png|webp|gif|svg|css|js|html|php)(\?|$)/i.test(srcUrl)) continue;
-
-    if (/\.m3u8(\?|$)/i.test(srcUrl)) {
-      hlsStreams.push(srcUrl);
-      continue;
-    }
-
-    if (/\.(mp4|webm|m4v)(\?|$)|\/get_file\//i.test(srcUrl)) {
-      const labelMatch =
-        m[0].match(/(?:label|title|res|data-res|size)=["']?(2160|1440|1080|720|480|360|240|144)p?/i) ||
-        srcUrl.match(/[_/-](2160|1440|1080|720|480|360|240|144)p?\b/i);
-      const res = labelMatch ? Number(labelMatch[1]) : 720;
-      if (!directStreams[res]) {
-        directStreams[res] = srcUrl;
       }
     }
   }
@@ -222,24 +250,25 @@ function findChildMediaPages(html, baseUrl) {
   return [...new Set(candidates)].slice(0, 4);
 }
 
-// probe direct MP4 streams to verify they are genuine video binaries and read their Content-Length
+// non-destructive stream probe: measures file size if CDN permits, but NEVER deletes valid video streams on Vercel
 async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHeader) {
   const verified = {};
   const entries = Object.entries(directStreams);
 
   await Promise.all(
     entries.map(async ([resKey, streamUrl]) => {
+      const numRes = Number(resKey) || 720;
       try {
         const probe = await fetch(streamUrl, {
           method: 'GET',
           headers: {
             'User-Agent': BROWSER_UA,
             'Referer': refererUrl,
-            'Range': 'bytes=0-16383',
+            'Range': 'bytes=0-4095',
             ...(cookieHeader ? { Cookie: cookieHeader } : {})
           },
           redirect: 'follow',
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(3500)
         });
 
         const contentType = (probe.headers.get('content-type') || '').toLowerCase();
@@ -249,36 +278,33 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
           ? Number(totalMatch[1])
           : Number(probe.headers.get('content-length') || 0);
 
-        const chunk = Buffer.from(await probe.arrayBuffer());
         try { probe.body?.cancel?.(); } catch {}
 
-        const headStr = chunk.slice(0, 32).toString('utf8');
-        const isHtmlOrManifest =
-          contentType.includes('text/html') ||
-          contentType.includes('text/plain') ||
-          contentType.includes('application/json') ||
-          contentType.includes('mpegurl') ||
-          headStr.includes('<!DOCTYPE') ||
-          headStr.includes('<html') ||
-          headStr.includes('#EXTM3U');
-
-        if (probe.ok && !isHtmlOrManifest && (totalBytes > 40000 || chunk.length >= 8192)) {
-          verified[Number(resKey)] = {
-            url: streamUrl,
-            filesize: totalBytes > 40000 ? totalBytes : null
-          };
+        // only reject if the server explicitly returned a tiny text/html error page
+        if (contentType.includes('text/html') && totalBytes > 0 && totalBytes < 15000) {
+          return;
         }
-      } catch {}
+
+        verified[numRes] = {
+          url: streamUrl,
+          filesize: totalBytes > 40000 ? totalBytes : null
+        };
+      } catch {
+        // keep the stream even if the CDN blocks datacenter Range requests on Vercel
+        verified[numRes] = {
+          url: streamUrl,
+          filesize: null
+        };
+      }
     })
   );
 
   return verified;
 }
 
-async function scrapePageDeep(targetUrl) {
+// fetch page HTML with automatic proxy fallback if the target site blocks Vercel datacenter IPs
+async function fetchHtmlWithFallback(targetUrl) {
   const parsed = new URL(targetUrl);
-  const hostLabel = parsed.hostname.replace(/^www\./, '').toUpperCase();
-
   let html = '';
   let cookieHeader = DEFAULT_AGE_COOKIES;
   let finalPageUrl = targetUrl;
@@ -289,11 +315,15 @@ async function scrapePageDeep(targetUrl) {
         'User-Agent': BROWSER_UA,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1',
         'Referer': parsed.origin + '/',
         'Cookie': DEFAULT_AGE_COOKIES
       },
       redirect: 'follow',
-      signal: AbortSignal.timeout(8500)
+      signal: AbortSignal.timeout(7000)
     });
 
     if (pageRes.url) finalPageUrl = pageRes.url;
@@ -312,8 +342,45 @@ async function scrapePageDeep(targetUrl) {
       }
     }
 
-    html = await pageRes.text();
+    if (pageRes.ok) {
+      html = await pageRes.text();
+    }
   } catch {}
+
+  // if direct fetch from Vercel was blocked by Cloudflare/403 or returned no media tags, try web proxy relays
+  if (!html || (!/<video|<source|video_url|xplayerSettings|setVideoUrl|m3u8|\.mp4/i.test(html))) {
+    const proxyRelays = [
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+    ];
+
+    for (const relayUrl of proxyRelays) {
+      try {
+        const relayRes = await fetch(relayUrl, {
+          headers: { 'User-Agent': BROWSER_UA },
+          signal: AbortSignal.timeout(6000)
+        });
+        if (relayRes.ok) {
+          const relayText = await relayRes.text();
+          if (relayText && relayText.length > 500) {
+            html = relayText;
+            if (/<video|<source|video_url|xplayerSettings|setVideoUrl|m3u8|\.mp4/i.test(html)) {
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return { html, cookieHeader, finalPageUrl };
+}
+
+async function scrapePageDeep(targetUrl) {
+  const parsed = new URL(targetUrl);
+  const hostLabel = parsed.hostname.replace(/^www\./, '').toUpperCase();
+
+  const { html, cookieHeader, finalPageUrl } = await fetchHtmlWithFallback(targetUrl);
 
   const getMeta = prop => {
     const r1 = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i');
@@ -332,7 +399,7 @@ async function scrapePageDeep(targetUrl) {
       (h1Match ? h1Match[1] : '') ||
       (titleMatch ? titleMatch[1] : '') ||
       humanizeUrlSlug(finalPageUrl)
-  );
+  ).replace(/\s*\(\d+\)\s*$/, '').trim();
 
   const durMeta =
     getMeta('video:duration') ||
@@ -370,18 +437,9 @@ async function scrapePageDeep(targetUrl) {
   if (Object.keys(directStreams).length === 0 && hlsStreams.length === 0 && childPages.length > 0) {
     for (const childUrl of childPages) {
       try {
-        const childRes = await fetch(childUrl, {
-          headers: {
-            'User-Agent': BROWSER_UA,
-            'Referer': finalPageUrl,
-            'Cookie': cookieHeader
-          },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(5500)
-        });
-        if (childRes.ok) {
-          const childHtml = await childRes.text();
-          extractStreamsFromHtml(childHtml, childRes.url || childUrl, directStreams, hlsStreams);
+        const childFetched = await fetchHtmlWithFallback(childUrl);
+        if (childFetched.html) {
+          extractStreamsFromHtml(childFetched.html, childFetched.finalPageUrl || childUrl, directStreams, hlsStreams);
           if (Object.keys(directStreams).length > 0 || hlsStreams.length > 0) break;
         }
       } catch {}
@@ -399,6 +457,11 @@ async function scrapePageDeep(targetUrl) {
         hlsVariantsByRes[resKey] = info;
       }
     });
+  }
+
+  // if an HLS stream exists but manifest probing was blocked by CDN IP rules, expose 720p for the HLS stream
+  if (uniqueHls.length > 0 && Object.keys(hlsVariantsByRes).length === 0 && Object.keys(verifiedDirectMap).length === 0) {
+    hlsVariantsByRes[720] = { url: uniqueHls[0], bandwidth: null };
   }
 
   const allRealResolutions = [
@@ -437,7 +500,7 @@ async function scrapePageDeep(targetUrl) {
   return {
     title: rawTitle || humanizeUrlSlug(finalPageUrl),
     extractor: decodeHtmlEntities(getMeta('og:site_name')) || hostLabel,
-    duration: formatDuration(durationSec) || 'Video',
+    duration: formatDuration(durationSec) || 'HD Video',
     thumbnail,
     resolutions: allRealResolutions,
     videoFormats,
