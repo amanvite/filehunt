@@ -132,11 +132,13 @@
                 <div className=${`progress-track ${isLoading ? 'active' : ''}`}>
                   <div className="progress-fill"></div>
                 </div>
-                ${apologyText && html`
-                  <div className="apology-banner">
-                    ${apologyText}
-                  </div>
-                `}
+                ${mediaData && FH.InspectorCard && html`
+                <${FH.InspectorCard}
+                  mediaData=${mediaData}
+                  sourceUrl=${inspectedUrl}
+                  onDownloadApology=${msg => setApologyText(msg)}
+                />
+              `}
               </div>
 
               <${FH.InspectorCard}
