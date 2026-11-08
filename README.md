@@ -10,7 +10,7 @@ A simple, web-based tool for downloading videos and audio from supported platfor
 - Terms of Service and Privacy Policy
 
 ### Tech Stack
-- React
+
 - JavaScript
 - CSS
 - Node.js
