@@ -389,14 +389,9 @@
           return;
         }
 
-        const targetHref = data.directStreamUrl || data.downloadUrl;
         const a = document.createElement('a');
-        a.href = targetHref;
+        a.href = data.downloadUrl;
         a.download = data.filename || `${mediaData.title || 'video'}.mp4`;
-        if (data.directStreamUrl) {
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-        }
         document.body.appendChild(a);
         a.click();
         a.remove();

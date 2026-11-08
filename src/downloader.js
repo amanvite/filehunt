@@ -46,7 +46,7 @@ async function inspectMediaUrl(rawUrl, clientHtml = '') {
     return cached;
   }
 
-  // Tier 1: Fast native APIs (YouTube InnerTube, Dailymotion Player API)
+  // Tier 1: Fast native APIs (YouTube Multi-Engine, Dailymotion Player API)
   try {
     const apiData = await resolveViaPublicPlatformApis(targetUrl);
     if (apiData && apiData.videoFormats?.length > 0) {
@@ -62,7 +62,6 @@ async function inspectMediaUrl(rawUrl, clientHtml = '') {
     }
   } catch {}
 
-  // On Vercel, run the fast HTML/Proxy scraper first so cold starts don't block on binary downloads
   if (IS_VERCEL) {
     try {
       const deepData = await scrapePageDeep(targetUrl, clientHtml);
@@ -106,7 +105,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
   const refererToUse = session.finalPageUrl || url;
   const targetResNum = Number(resolution);
 
-  // 1. Direct MP4 stream
+  // 1. Direct MP4 stream proxied through /api/download with Content-Disposition: attachment
   if (type !== 'mp3') {
     const directMap = session.verifiedDirectMap || {};
     const availableRes = Object.keys(directMap).map(Number).sort((a, b) => b - a);
@@ -129,13 +128,12 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
         ok: true,
         token,
         st,
-        filename: cleanFilename,
-        directStreamUrl: IS_VERCEL ? chosenDirect.url : null
+        filename: cleanFilename
       };
     }
   }
 
-  // 2. Standalone yt-dlp download on Localhost
+  // 2. Standalone yt-dlp download
   if (!IS_VERCEL) {
     const ffmpegBin = getLocalFfmpegPath();
     const hlsVariant = session.hlsVariantsByRes?.[targetResNum]?.url;
@@ -239,7 +237,6 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     return { ok: true, token, st, filename: cleanFilename };
   }
 
-  // 4. If user requested MP3 on Vercel where only a direct MP4 stream exists, hand off the direct stream
   const fallbackDirect = Object.values(session.verifiedDirectMap || {})[0]?.url;
   if (fallbackDirect) {
     const payload = {

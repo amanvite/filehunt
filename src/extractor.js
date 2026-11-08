@@ -156,7 +156,6 @@ async function runYtDlp(args, timeoutMs = 45000) {
   });
 }
 
-// filter out thumbnail hover previews and non-video assets without rejecting valid video URLs
 function isPreviewOrJunkUrl(candidateUrl) {
   if (!candidateUrl) return true;
   return (
@@ -167,7 +166,6 @@ function isPreviewOrJunkUrl(candidateUrl) {
   );
 }
 
-// remove only thumbnail hover-preview <video> tags while preserving ALL <script> and <meta> tags on the page
 function stripHoverPreviewTags(rawHtml) {
   if (!rawHtml) return '';
   return rawHtml.replace(
@@ -363,7 +361,7 @@ async function streamHlsSegmentsToResponse(variantM3u8Url, refererUrl, cookieHea
   }
 
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Type', 'application/octet-stream');
 
   for (const segUrl of segmentUrls.slice(0, 140)) {
     if (res.writableEnded || res.destroyed) break;
@@ -384,110 +382,225 @@ async function streamHlsSegmentsToResponse(variantM3u8Url, refererUrl, cookieHea
   res.end();
 }
 
-async function resolveViaPublicPlatformApis(targetUrl) {
-  const ytMatch =
-    targetUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ||
-    targetUrl.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/) ||
-    targetUrl.match(/youtube\.com\/(?:shorts|embed)\/([a-zA-Z0-9_-]{11})/);
-
-  if (ytMatch) {
-    const videoId = ytMatch[1];
-    const clients = [
-      {
-        clientName: 'ANDROID_VR',
-        clientVersion: '1.60.19',
-        androidSdkVersion: 34,
-        userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1; Cronet/119.0.6045.194)'
+// Multi-tier YouTube resolver that works on Vercel datacenter IPs (Embed VisitorData + InnerTube + Piped/Invidious fallback)
+async function resolveYouTubeMultiEngine(videoId, targetUrl) {
+  // Step 1: Fetch embed page to harvest a valid visitorData token & encrypted sts signature timestamp
+  let visitorData = '';
+  let sts = null;
+  try {
+    const embedRes = await fetch(`https://www.youtube.com/embed/${videoId}`, {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        'Accept-Language': 'en-US,en;q=0.9'
       },
-      {
-        clientName: 'IOS',
-        clientVersion: '19.45.4',
-        deviceMake: 'Apple',
-        deviceModel: 'iPhone16,2',
-        osName: 'iPhone',
-        osVersion: '18.1.0.22B83',
-        userAgent: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1 like Mac OS X;)'
-      }
-    ];
+      signal: AbortSignal.timeout(4000)
+    });
+    if (embedRes.ok) {
+      const embedHtml = await embedRes.text();
+      const vdMatch = embedHtml.match(/"VISITOR_DATA"\s*:\s*"([^"]+)"/i);
+      const stsMatch = embedHtml.match(/"sts"\s*:\s*(\d+)/i);
+      if (vdMatch?.[1]) visitorData = vdMatch[1];
+      if (stsMatch?.[1]) sts = Number(stsMatch[1]);
+    }
+  } catch {}
 
-    for (const client of clients) {
-      try {
-        const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': client.userAgent
+  const clients = [
+    {
+      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+      clientVersion: '2.0',
+      userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/11.50) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15',
+      isEmbedded: true
+    },
+    {
+      clientName: 'IOS',
+      clientVersion: '19.45.4',
+      deviceMake: 'Apple',
+      deviceModel: 'iPhone16,2',
+      osName: 'iPhone',
+      osVersion: '18.1.0.22B83',
+      userAgent: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1 like Mac OS X;)'
+    },
+    {
+      clientName: 'ANDROID_VR',
+      clientVersion: '1.60.19',
+      androidSdkVersion: 34,
+      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1; Cronet/119.0.6045.194)'
+    },
+    {
+      clientName: 'ANDROID_TESTSUITE',
+      clientVersion: '1.9',
+      androidSdkVersion: 30,
+      userAgent: 'com.google.android.youtube/1.9 (Linux; U; Android 11; en_US)'
+    }
+  ];
+
+  for (const client of clients) {
+    try {
+      const bodyPayload = {
+        videoId,
+        racyCheckOk: true,
+        contentCheckOk: true,
+        context: {
+          client: {
+            clientName: client.clientName,
+            clientVersion: client.clientVersion,
+            hl: 'en',
+            gl: 'US',
+            ...(visitorData ? { visitorData } : {}),
+            ...(client.androidSdkVersion ? { androidSdkVersion: client.androidSdkVersion } : {}),
+            ...(client.deviceMake
+              ? {
+                  deviceMake: client.deviceMake,
+                  deviceModel: client.deviceModel,
+                  osName: client.osName,
+                  osVersion: client.osVersion
+                }
+              : {})
           },
-          body: JSON.stringify({
-            videoId,
-            context: {
-              client: {
-                clientName: client.clientName,
-                clientVersion: client.clientVersion,
-                hl: 'en',
-                gl: 'US',
-                ...(client.androidSdkVersion ? { androidSdkVersion: client.androidSdkVersion } : {}),
-                ...(client.deviceMake ? { deviceMake: client.deviceMake, deviceModel: client.deviceModel, osName: client.osName, osVersion: client.osVersion } : {})
+          ...(client.isEmbedded
+            ? {
+                thirdParty: {
+                  embedUrl: 'https://www.youtube.com/'
+                }
               }
-            }
-          }),
-          signal: AbortSignal.timeout(5500)
-        });
+            : {})
+        },
+        ...(sts ? { playbackContext: { contentPlaybackContext: { signatureTimestamp: sts } } } : {})
+      };
 
-        if (!res.ok) continue;
-        const data = await res.json();
-        const details = data?.videoDetails;
-        const streamingData = data?.streamingData;
-        if (!details || !streamingData) continue;
+      const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': client.userAgent,
+          ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {})
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(5000)
+      });
 
-        const durationSec = Number(details.lengthSeconds) || null;
-        const allFormats = [
-          ...(streamingData.formats || []),
-          ...(streamingData.adaptiveFormats || [])
-        ];
+      if (!res.ok) continue;
+      const data = await res.json();
+      const details = data?.videoDetails;
+      const streamingData = data?.streamingData;
+      if (!details || !streamingData) continue;
 
-        const resolutionMap = new Map();
-        const verifiedDirectMap = {};
+      const durationSec = Number(details.lengthSeconds) || null;
+      const allFormats = [
+        ...(streamingData.formats || []),
+        ...(streamingData.adaptiveFormats || [])
+      ];
 
-        allFormats.forEach(f => {
-          if (f.mimeType && f.mimeType.startsWith('video/')) {
-            const rawHeight = f.height || parseInt(String(f.qualityLabel || ''), 10);
-            const normRes = snapToStandardResolution(rawHeight);
-            if (!normRes) return;
+      const resolutionMap = new Map();
+      const verifiedDirectMap = {};
 
-            const sizeBytes =
-              Number(f.contentLength) ||
-              (f.bitrate && durationSec ? Math.round((f.bitrate / 8) * durationSec) : null);
-            const hasAudio = Boolean(f.audioQuality);
+      allFormats.forEach(f => {
+        if (f.mimeType && f.mimeType.startsWith('video/') && f.url) {
+          const rawHeight = f.height || parseInt(String(f.qualityLabel || ''), 10);
+          const normRes = snapToStandardResolution(rawHeight);
+          if (!normRes) return;
 
-            const existing = resolutionMap.get(normRes);
-            if (!existing || (hasAudio && !existing.hasAudio) || (sizeBytes && !existing.sizeBytes)) {
-              resolutionMap.set(normRes, {
-                resolution: normRes,
-                ext: 'mp4',
-                hasAudio,
-                codec: 'Video (H.264 + AAC)',
-                sizeBytes,
-                sizeText: formatBytes(sizeBytes)
-              });
-            }
+          const sizeBytes =
+            Number(f.contentLength) ||
+            (f.bitrate && durationSec ? Math.round((f.bitrate / 8) * durationSec) : null);
+          const hasAudio = Boolean(f.audioQuality);
 
-            if (f.url && hasAudio) {
-              verifiedDirectMap[normRes] = {
-                url: f.url,
-                filesize: sizeBytes
-              };
-            }
+          const existing = resolutionMap.get(normRes);
+          if (!existing || (hasAudio && !existing.hasAudio) || (sizeBytes && !existing.sizeBytes)) {
+            resolutionMap.set(normRes, {
+              resolution: normRes,
+              ext: 'mp4',
+              hasAudio,
+              codec: 'Video (H.264 + AAC)',
+              sizeBytes,
+              sizeText: formatBytes(sizeBytes)
+            });
           }
-        });
 
-        const videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
-        if (videoFormats.length === 0) continue;
+          if (hasAudio || !verifiedDirectMap[normRes]) {
+            verifiedDirectMap[normRes] = {
+              url: f.url,
+              filesize: sizeBytes
+            };
+          }
+        }
+      });
 
+      const videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
+      if (videoFormats.length === 0) continue;
+
+      return {
+        title: details.title || 'YouTube Video',
+        extractor: 'YouTube',
+        uploader: details.author || 'YouTube',
+        duration: formatDuration(durationSec) || 'Video',
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+        resolutions: videoFormats.map(v => v.resolution),
+        videoFormats,
+        audioFormats: [
+          { bitrate: 320, label: '320 kbps', desc: 'MP3 High Bitrate Audio' },
+          { bitrate: 192, label: '192 kbps', desc: 'MP3 Standard Stereo Audio' },
+          { bitrate: 128, label: '128 kbps', desc: 'MP3 Compact Audio' }
+        ],
+        verifiedDirectMap,
+        hlsVariantsByRes: {},
+        hlsStreams: streamingData.hlsManifestUrl ? [streamingData.hlsManifestUrl] : [],
+        childPages: [],
+        finalPageUrl: targetUrl,
+        cookieHeader: DEFAULT_AGE_COOKIES
+      };
+    } catch {}
+  }
+
+  // Step 2: Public Piped / Invidious API fallback if YouTube blocked the Vercel AWS IP
+  const pipedInstances = [
+    `https://pipedapi.kavin.rocks/streams/${videoId}`,
+    `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
+    `https://pipedapi.moomoo.me/streams/${videoId}`,
+    `https://inv.tux.pizza/api/v1/videos/${videoId}`,
+    `https://invidious.nerdvpn.de/api/v1/videos/${videoId}`
+  ];
+
+  for (const apiEndpoint of pipedInstances) {
+    try {
+      const pRes = await fetch(apiEndpoint, {
+        headers: { 'User-Agent': BROWSER_UA },
+        signal: AbortSignal.timeout(4500)
+      });
+      if (!pRes.ok) continue;
+      const pData = await pRes.json();
+
+      const durationSec = Number(pData.duration || pData.lengthSeconds) || null;
+      const resolutionMap = new Map();
+      const verifiedDirectMap = {};
+
+      // Piped format
+      const streamsList = pData.videoStreams || pData.formatStreams || [];
+      streamsList.forEach(s => {
+        if (!s?.url) return;
+        const rawRes = parseInt(String(s.quality || s.resolution || ''), 10);
+        const normRes = snapToStandardResolution(rawRes);
+        if (!normRes) return;
+        const hasAudio = s.videoOnly === false || Boolean(s.audioQuality) || Array.isArray(pData.formatStreams);
+        const existing = resolutionMap.get(normRes);
+        if (!existing || (hasAudio && !existing.hasAudio)) {
+          resolutionMap.set(normRes, {
+            resolution: normRes,
+            ext: 'mp4',
+            hasAudio,
+            codec: 'Video (H.264 + AAC)',
+            sizeText: null
+          });
+          verifiedDirectMap[normRes] = { url: s.url, filesize: null };
+        }
+      });
+
+      const videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
+      if (videoFormats.length > 0) {
         return {
-          title: details.title || 'YouTube Video',
+          title: pData.title || 'YouTube Video',
           extractor: 'YouTube',
-          uploader: details.author || 'YouTube',
+          uploader: pData.uploader || pData.author || 'YouTube',
           duration: formatDuration(durationSec) || 'Video',
           thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
           resolutions: videoFormats.map(v => v.resolution),
@@ -499,13 +612,27 @@ async function resolveViaPublicPlatformApis(targetUrl) {
           ],
           verifiedDirectMap,
           hlsVariantsByRes: {},
-          hlsStreams: streamingData.hlsManifestUrl ? [streamingData.hlsManifestUrl] : [],
+          hlsStreams: pData.hls ? [pData.hls] : [],
           childPages: [],
           finalPageUrl: targetUrl,
           cookieHeader: DEFAULT_AGE_COOKIES
         };
-      } catch {}
-    }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function resolveViaPublicPlatformApis(targetUrl) {
+  const ytMatch =
+    targetUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ||
+    targetUrl.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/) ||
+    targetUrl.match(/youtube\.com\/(?:shorts|embed)\/([a-zA-Z0-9_-]{11})/);
+
+  if (ytMatch) {
+    const ytData = await resolveYouTubeMultiEngine(ytMatch[1], targetUrl);
+    if (ytData) return ytData;
   }
 
   const dmMatch =
@@ -590,7 +717,6 @@ async function resolveViaPublicPlatformApis(targetUrl) {
   return null;
 }
 
-// extract streams from full page HTML (retaining all <script> blocks while ignoring hover-preview tags)
 function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams = []) {
   const cleanedHtml = stripHoverPreviewTags(rawHtml);
   const unpacked = unpackDeanEdwards(cleanedHtml);
@@ -615,7 +741,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
 
   const fullText = unescaped + '\n' + urlDecodedExtras;
 
-  // 0. OpenGraph, Twitter Stream & <link rel="preload" as="video"> (used by xhaccess, faphouse2, etc.)
   const metaStreamRegex = /<meta[^>]+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["'][^>]+content=["']([^"']+)["']/gi;
   let metaMatch;
   while ((metaMatch = metaStreamRegex.exec(fullText)) !== null) {
@@ -636,7 +761,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
-  // 1. XVideos / XNXX html5player signatures
   const xvHigh = fullText.match(/setVideoUrlHigh\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvLow = fullText.match(/setVideoUrlLow\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvHls = fullText.match(/setVideoHLS\(\s*['"]([^'"]+)['"]\s*\)/i);
@@ -644,7 +768,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
   if (xvLow?.[1]) directStreams[360] = resolveAbsoluteUrl(xvLow[1], baseUrl);
   if (xvHls?.[1]) hlsStreams.push(resolveAbsoluteUrl(xvHls[1], baseUrl));
 
-  // 2. Pornhub / RedTube / YouPorn / Tube8 mediaDefinitions
   const mediaDefRegex = /"videoUrl"\s*:\s*"([^"]+)"\s*,\s*"quality"\s*:\s*"?(\d{3,4})"?/gi;
   let mdMatch;
   while ((mdMatch = mediaDefRegex.exec(fullText)) !== null) {
@@ -656,7 +779,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
-  // 3. SpankBang stream_data
   ['2160p', '1440p', '1080p', '720p', '480p', '360p', '240p'].forEach(qKey => {
     const sbMatch = fullText.match(new RegExp(`['"]?${qKey}['"]?\\s*:\\s*\\[\\s*['"]([^'"]+)['"]`, 'i'));
     if (sbMatch?.[1]) {
@@ -667,7 +789,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 4. xHamster, FapHouse & mirror domains (faphouse2.com, xhaccess.com, xhamster46.desi) window.initials
   const initialsMatch = rawHtml.match(/window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
   if (initialsMatch) {
     try {
@@ -708,7 +829,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     } catch {}
   }
 
-  // 5. KVS (kt_player) flashvars
   const licenseMatch = fullText.match(/license_code\s*:\s*['"]([^'"]+)['"]/i);
   const licenseCode = licenseMatch ? licenseMatch[1] : '';
 
@@ -735,7 +855,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 6. <video> and <source> tags
   const html5VideoTagRegex = /<(?:video|source)[^>]+(?:src|data-src|data-video|data-mp4)=["']([^"']+)["'][^>]*>/gi;
   let vMatch;
   while ((vMatch = html5VideoTagRegex.exec(fullText)) !== null) {
@@ -762,7 +881,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
-  // 7. Generic JWPlayer / FluidPlayer / Plyr / VideoJS / JSON-LD contentUrl properties
   const playerPropRegex = /(?:__fileurl|file|video_url|mp4_url|stream_url|contentUrl|hq_video_file|normal_video_file)\s*[:=]\s*['"]((?:https?:)?\/\/[^'"\s<>]+|\/[^'"\s<>]+)['"]/gi;
   let pMatch;
   while ((pMatch = playerPropRegex.exec(fullText)) !== null) {
@@ -780,7 +898,6 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
-  // 8. Scan for any remaining .m3u8 manifests or direct .mp4 / get_file URLs
   const m3u8Regex = /(?:https?:)?\/\/[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]+)?/gi;
   let hMatch;
   while ((hMatch = m3u8Regex.exec(fullText)) !== null) {
@@ -839,7 +956,6 @@ function findChildMediaPages(html, baseUrl) {
   return [...new Set(candidates)].slice(0, 5);
 }
 
-// verify direct MP4 streams: reject >=200/206 files smaller than 1.5 MB, but NEVER delete a stream if a CDN blocks Vercel's AWS probe with 403/401
 async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHeader) {
   const verified = {};
   const entries = Object.entries(directStreams);
@@ -861,7 +977,6 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
           signal: AbortSignal.timeout(3500)
         });
 
-        // if the CDN blocked Vercel's datacenter IP probe (403/401/429), keep the stream so the user's browser can download it directly
         if (!probe.ok) {
           verified[numRes] = {
             url: streamUrl,
@@ -879,7 +994,6 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
 
         try { probe.body?.cancel?.(); } catch {}
 
-        // when probe.ok is true (200/206), reject HTML pages or tiny hover-preview clips under 1.5 MB
         if (
           contentType.includes('text/html') ||
           contentType.includes('text/plain') ||
@@ -905,7 +1019,6 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
   return verified;
 }
 
-// fetch page HTML with parallel proxy relay fallback when a site blocks Vercel's AWS IP
 async function fetchHtmlWithFallback(targetUrl) {
   const parsed = new URL(targetUrl);
   let html = '';
@@ -989,6 +1102,8 @@ async function inspectViaYtDlp(targetUrl) {
       '--no-warnings',
       '--no-check-certificates',
       '--geo-bypass',
+      '--extractor-args',
+      'youtube:player_client=tv_embedded,ios,web_embedded',
       '--referer',
       parsed.origin + '/',
       '--user-agent',

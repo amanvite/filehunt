@@ -1,4 +1,4 @@
-// suppress the NODE_TLS_REJECT_UNAUTHORIZED console warning while allowing self-signed video CDNs
+// I suppress the NODE_TLS_REJECT_UNAUTHORIZED warning while allowing self-signed video CDNs
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = function (warning, ...args) {
   if (typeof warning === 'string' && warning.includes('NODE_TLS_REJECT_UNAUTHORIZED')) {
@@ -8,7 +8,7 @@ process.emitWarning = function (warning, ...args) {
 };
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-// satisfy Vercel's static Express entrypoint detector at build time
+// satisfy Vercel's static Express entrypoint check at build time
 if (process.env.__VERCEL_BUILD_SCANNER__) {
   require('express');
 }
@@ -95,13 +95,26 @@ function parseJsonBody(req) {
   });
 }
 
+// I append &title= to googlevideo.com URLs so Google's CDN forces a file download instead of opening a video player tab
+function attachDownloadTitleParam(rawStreamUrl, filename) {
+  try {
+    const parsed = new URL(rawStreamUrl);
+    if (parsed.hostname.includes('googlevideo.com')) {
+      const cleanTitle = String(filename || 'video').replace(/\.(mp4|mp3|webm)$/i, '');
+      parsed.searchParams.set('title', cleanTitle);
+      return parsed.href;
+    }
+  } catch {}
+  return rawStreamUrl;
+}
+
 async function handleApiRoutes(req, res) {
   const route = req.pathname;
 
   if (req.method === 'GET' && route === '/api/health') {
     return res.json({
       status: 'ok',
-      version: '5.1.0',
+      version: '5.2.0',
       runtime: IS_VERCEL ? 'vercel-serverless' : 'local-node'
     });
   }
@@ -190,7 +203,7 @@ async function handleApiRoutes(req, res) {
       if (entry.mode === 'file' && entry.filePath && fs.existsSync(entry.filePath)) {
         const stat = fs.statSync(entry.filePath);
         res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
-        res.setHeader('Content-Type', entry.filename.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4');
+        res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Content-Length', String(stat.size));
 
         const readStream = fs.createReadStream(entry.filePath);
@@ -201,31 +214,40 @@ async function handleApiRoutes(req, res) {
       }
 
       if (entry.mode === 'direct') {
-        // On Vercel, redirect directly to the stream CDN URL so downloads never hit Vercel's 4.5 MB Lambda cap or AWS IP block
-        if (IS_VERCEL) {
-          return res.redirect(entry.streamUrl);
-        }
-
+        const targetStreamUrl = attachDownloadTitleParam(entry.streamUrl, entry.filename);
         try {
-          const upstream = await fetch(entry.streamUrl, {
+          const upstream = await fetch(targetStreamUrl, {
             headers: {
               'User-Agent': BROWSER_UA,
-              'Referer': entry.referer,
+              'Referer': entry.referer || targetStreamUrl,
               ...(entry.cookies ? { Cookie: entry.cookies } : {})
             },
             redirect: 'follow'
           });
 
-          if (upstream.ok && upstream.body) {
+          const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+          // verify the upstream response is a real media stream and not an HTML redirect page
+          if (upstream.ok && upstream.body && !contentType.includes('text/html')) {
             const contentLen = Number(upstream.headers.get('content-length') || 0);
             res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
-            res.setHeader('Content-Type', entry.ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-            if (contentLen) res.setHeader('Content-Length', String(contentLen));
+            // use application/octet-stream so Chrome always saves to disk instead of opening a video player tab
+            res.setHeader('Content-Type', 'application/octet-stream');
+            if (contentLen > 0) {
+              res.setHeader('Content-Length', String(contentLen));
+            }
             return Readable.fromWeb(upstream.body).pipe(res);
           }
-          return res.redirect(entry.streamUrl);
+
+          // if the CDN is IP-bound to the user's residential IP (e.g. signed googlevideo.com), redirect with &title= attached
+          if (targetStreamUrl.includes('googlevideo.com')) {
+            return res.redirect(targetStreamUrl);
+          }
+          return res.redirect('/?apology=1');
         } catch {
-          return res.redirect(entry.streamUrl);
+          if (targetStreamUrl.includes('googlevideo.com')) {
+            return res.redirect(targetStreamUrl);
+          }
+          return res.redirect('/?apology=1');
         }
       }
 
@@ -259,7 +281,6 @@ async function handleApiRoutes(req, res) {
         return res.json({
           ok: true,
           downloadUrl: `/api/download?${dlQuery.toString()}`,
-          directStreamUrl: result.directStreamUrl || null,
           filename: result.filename
         });
       }
