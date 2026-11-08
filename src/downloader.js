@@ -1,17 +1,25 @@
 const path = require('path');
 const fs = require('fs');
-const { TEMP_DIR, BROWSER_UA, DEFAULT_AGE_COOKIES } = require('../config/constants');
-const { LruCache } = require('../utils/lruCache');
-const { sanitizeFilename } = require('../utils/mediaFormatters');
-const { resolveViaPublicPlatformApis } = require('../extractors/publicApiResolver');
-const { scrapePageDeep } = require('../extractors/htmlStreamScraper');
-const { parseHlsMasterManifest } = require('../extractors/hlsParser');
-const { getLocalFfmpegPath, runYtDlp, inspectViaYtDlp } = require('../extractors/ytdlpBridge');
+const {
+  TEMP_DIR,
+  BROWSER_UA,
+  DEFAULT_AGE_COOKIES,
+  MIN_VALID_VIDEO_BYTES,
+  LruCache,
+  sanitizeFilename
+} = require('./config');
+const {
+  getLocalFfmpegPath,
+  runYtDlp,
+  parseHlsMasterManifest,
+  resolveViaPublicPlatformApis,
+  inspectViaYtDlp,
+  scrapePageDeep
+} = require('./extractor');
 
 const sessionCache = new LruCache(250, 10 * 60 * 1000);
 const preparedTokens = new LruCache(250, 15 * 60 * 1000);
 
-// encode a stateless token so any Vercel serverless instance can stream the file even on a cold start
 function encodeStatelessToken(payloadObj) {
   try {
     return Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
@@ -37,7 +45,7 @@ async function inspectMediaUrl(rawUrl) {
     return cached;
   }
 
-  // Tier 1: Fast native platform APIs (YouTube InnerTube, Dailymotion Player Metadata)
+  // Tier 1: Fast native APIs (YouTube InnerTube, Dailymotion Player API, Eporner JSON API)
   try {
     const apiData = await resolveViaPublicPlatformApis(targetUrl);
     if (apiData && apiData.videoFormats?.length > 0) {
@@ -53,21 +61,21 @@ async function inspectMediaUrl(rawUrl) {
     }
   } catch {}
 
-  // Tier 2: Deep HTML / KVS / xPlayer / Packed JS / Child Iframe / HLS Scraper (fast on both Vercel & Local)
-  try {
-    const deepData = await scrapePageDeep(targetUrl);
-    if (deepData && deepData.videoFormats?.length > 0) {
-      sessionCache.set(targetUrl, deepData);
-      return deepData;
-    }
-  } catch {}
-
-  // Tier 3: Standalone yt-dlp inspection (works on BOTH Localhost Windows and Vercel Linux /tmp!)
+  // Tier 2: Standalone yt-dlp inspection FIRST (handles 1,800+ popular sites accurately without sidebar hover clips)
   try {
     const ytData = await inspectViaYtDlp(targetUrl);
     if (ytData && ytData.videoFormats?.length > 0) {
       sessionCache.set(targetUrl, ytData);
       return ytData;
+    }
+  } catch {}
+
+  // Tier 3: Deep HTML / KVS / /embed/<id> / Child Iframe / Headless Browser Inspector (with >1.5MB filter)
+  try {
+    const deepData = await scrapePageDeep(targetUrl);
+    if (deepData && deepData.videoFormats?.length > 0) {
+      sessionCache.set(targetUrl, deepData);
+      return deepData;
     }
   } catch {}
 
@@ -86,7 +94,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
   const refererToUse = session.finalPageUrl || url;
   const targetResNum = Number(resolution);
 
-  // 1. Direct MP4 stream (uses both in-memory token AND stateless token for Vercel multi-instance safety)
+  // 1. Direct MP4 stream (verified >= 1.5 MB)
   if (type !== 'mp3') {
     const directMap = session.verifiedDirectMap || {};
     const availableRes = Object.keys(directMap).map(Number).sort((a, b) => b - a);
@@ -109,7 +117,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
     }
   }
 
-  // 2. Standalone yt-dlp download (runs on both Localhost and Vercel /tmp)
+  // 2. Standalone yt-dlp download across main URL, /embed/<id>, child iframes, and HLS streams
   const ffmpegBin = getLocalFfmpegPath();
   const hlsVariant = session.hlsVariantsByRes?.[targetResNum]?.url;
   const directFallback = Object.values(session.verifiedDirectMap || {})[0]?.url;
@@ -164,7 +172,7 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
       }
 
       args.push(targetToRun);
-      await runYtDlp(args, 50000);
+      await runYtDlp(args, 60000);
 
       const produced = fs
         .readdirSync(TEMP_DIR)
@@ -173,7 +181,8 @@ async function prepareMediaDownload({ url, title, type = 'mp4', resolution = '72
       if (produced.length > 0) {
         const fullPath = path.join(TEMP_DIR, produced[0]);
         const stat = fs.statSync(fullPath);
-        if (stat.size > 25000) {
+        const minSize = type === 'mp3' ? 50000 : MIN_VALID_VIDEO_BYTES;
+        if (stat.size >= minSize) {
           const actualExt = path.extname(produced[0]).replace('.', '') || ext;
           const finalDownloadName = sanitizeFilename(title, suffix, actualExt);
           const token = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

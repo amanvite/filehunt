@@ -1,7 +1,7 @@
 {
   "name": "filehunt",
-  "version": "4.0.1",
-  "description": "FileHunt - Modular Universal Media Stream Inspector & Downloader",
+  "version": "5.0.0",
+  "description": "FileHunt - Universal Online Video Downloader",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
