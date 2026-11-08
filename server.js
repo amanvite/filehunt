@@ -8,7 +8,7 @@ process.emitWarning = function (warning, ...args) {
 };
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-// satisfy Vercel's static Express entrypoint detector at build time without relying on cached node_modules at runtime
+// satisfy Vercel's static Express entrypoint detector at build time
 if (process.env.__VERCEL_BUILD_SCANNER__) {
   require('express');
 }
@@ -41,7 +41,6 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
-// attach Express-compatible helper methods onto native http.ServerResponse
 function decorateResponse(res) {
   res.status = function (code) {
     res.statusCode = code;
@@ -83,7 +82,7 @@ function parseJsonBody(req) {
     let raw = '';
     req.on('data', chunk => {
       raw += chunk.toString();
-      if (raw.length > 1024 * 1024) req.destroy();
+      if (raw.length > 4 * 1024 * 1024) req.destroy();
     });
     req.on('end', () => {
       try {
@@ -99,21 +98,18 @@ function parseJsonBody(req) {
 async function handleApiRoutes(req, res) {
   const route = req.pathname;
 
-  // GET /api/health
   if (req.method === 'GET' && route === '/api/health') {
     return res.json({
       status: 'ok',
-      version: '5.0.0',
+      version: '5.1.0',
       runtime: IS_VERCEL ? 'vercel-serverless' : 'local-node'
     });
   }
 
-  // GET /api/extractors
   if (req.method === 'GET' && route === '/api/extractors') {
     return res.json({ extractors: BUILTIN_EXTRACTORS });
   }
 
-  // GET /api/proxy-image
   if (req.method === 'GET' && route === '/api/proxy-image') {
     const { url } = req.query || {};
     if (!url) return res.status(400).send('');
@@ -146,9 +142,8 @@ async function handleApiRoutes(req, res) {
     }
   }
 
-  // POST /api/info
   if (req.method === 'POST' && route === '/api/info') {
-    const { url } = req.body || {};
+    const { url, clientHtml } = req.body || {};
     if (!url) {
       return res.status(400).json({ error: 'Please paste a valid video link.' });
     }
@@ -160,7 +155,7 @@ async function handleApiRoutes(req, res) {
     }
 
     try {
-      const info = await inspectMediaUrl(url.trim());
+      const info = await inspectMediaUrl(url.trim(), clientHtml || '');
       if (info && info.videoFormats?.length > 0) {
         return res.json({
           title: info.title,
@@ -183,7 +178,6 @@ async function handleApiRoutes(req, res) {
     });
   }
 
-  // GET /api/download
   if (req.method === 'GET' && route === '/api/download') {
     const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192', prepare, token, st } = req.query || {};
 
@@ -207,6 +201,11 @@ async function handleApiRoutes(req, res) {
       }
 
       if (entry.mode === 'direct') {
+        // On Vercel, redirect directly to the stream CDN URL so downloads never hit Vercel's 4.5 MB Lambda cap or AWS IP block
+        if (IS_VERCEL) {
+          return res.redirect(entry.streamUrl);
+        }
+
         try {
           const upstream = await fetch(entry.streamUrl, {
             headers: {
@@ -219,10 +218,6 @@ async function handleApiRoutes(req, res) {
 
           if (upstream.ok && upstream.body) {
             const contentLen = Number(upstream.headers.get('content-length') || 0);
-            if (IS_VERCEL && contentLen > 4200000) {
-              return res.redirect(entry.streamUrl);
-            }
-
             res.setHeader('Content-Disposition', `attachment; filename="${entry.filename}"`);
             res.setHeader('Content-Type', entry.ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
             if (contentLen) res.setHeader('Content-Length', String(contentLen));
@@ -264,6 +259,7 @@ async function handleApiRoutes(req, res) {
         return res.json({
           ok: true,
           downloadUrl: `/api/download?${dlQuery.toString()}`,
+          directStreamUrl: result.directStreamUrl || null,
           filename: result.filename
         });
       }

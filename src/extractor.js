@@ -16,7 +16,6 @@ const {
   resolveAbsoluteUrl
 } = require('./config');
 
-// I select the standalone yt-dlp binary matching the current OS
 const BINARY_FILENAME =
   process.platform === 'win32'
     ? 'yt-dlp.exe'
@@ -104,8 +103,10 @@ async function ensureYtDlpBinary() {
 }
 
 function initLocalBinaries() {
-  getLocalFfmpegPath();
-  ensureYtDlpBinary();
+  if (!IS_VERCEL) {
+    getLocalFfmpegPath();
+    ensureYtDlpBinary();
+  }
 }
 
 async function runYtDlp(args, timeoutMs = 45000) {
@@ -155,39 +156,26 @@ async function runYtDlp(args, timeoutMs = 45000) {
   });
 }
 
-// I check if a candidate URL looks like a hover thumbnail preview / trailer stub
+// filter out thumbnail hover previews and non-video assets without rejecting valid video URLs
 function isPreviewOrJunkUrl(candidateUrl) {
   if (!candidateUrl) return true;
   return (
-    /\.m3u8|preview|trailer|teaser|sample|thumb|sprite|banner|logo|intro|outro|_prv|_pre\b|-preview|\/previews\/|\/thumbs\/|\/t\/|_TPL_/i.test(
+    /\.m3u8|_preview\.|-preview\.|\/previews\/|\/thumbs\/|\/t\/|sprite|banner|logo|_TPL_/i.test(
       candidateUrl
     ) ||
     /\.(jpg|jpeg|png|webp|gif|svg|css|js|vtt|srt|xml|html|php|json|ico)(\?|$)/i.test(candidateUrl)
   );
 }
 
-// I strip related-video grids and sidebars before scanning generic <video> tags so 168 KB hover clips are ignored
-function isolateMainPlayerHtml(rawHtml) {
+// remove only thumbnail hover-preview <video> tags while preserving ALL <script> and <meta> tags on the page
+function stripHoverPreviewTags(rawHtml) {
   if (!rawHtml) return '';
-  let cleaned = rawHtml
-    // remove any <video> or <source> tags that have data-preview or mouseover preview attributes
-    .replace(/<(?:video|source)[^>]*(?:data-preview|data-trailer|onmouseover|onmouseenter|class=["'][^"']*preview)[^>]*>/gi, '');
-
-  // cut off common related-videos footer blocks where 20+ hover preview MP4s sit
-  const cutoffPatterns = [
-    /<div[^>]+(?:id|class)=["'][^"']*(?:related-videos|list-videos-related|under-player|more-videos|recommendations|video-recommendations)[^"']*["']/i
-  ];
-  for (const rx of cutoffPatterns) {
-    const match = cleaned.match(rx);
-    if (match && match.index && match.index > 1500) {
-      cleaned = cleaned.slice(0, match.index);
-      break;
-    }
-  }
-  return cleaned;
+  return rawHtml.replace(
+    /<(?:video|source)[^>]*(?:data-preview|data-trailer|onmouseover|onmouseenter)[^>]*>/gi,
+    ''
+  );
 }
 
-// I unpack Dean Edwards packed JS: eval(function(p,a,c,k,e,d){...})
 function unpackDeanEdwards(html) {
   let unpackedChunks = '';
   const packedRegex = /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\(\s*'([\s\S]*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\|'\)/gi;
@@ -234,7 +222,6 @@ function decodeInlineBase64Urls(text) {
   return decodedExtras;
 }
 
-// I decode KVS (kt_player) "function/0/..." obfuscated URLs
 function decodeKvsUrl(rawUrl, licenseCode) {
   if (!rawUrl) return '';
   if (!rawUrl.startsWith('function/0/')) return rawUrl;
@@ -287,7 +274,6 @@ function decodeKvsUrl(rawUrl, licenseCode) {
   }
 }
 
-// I parse HLS (.m3u8) master playlists to discover the exact resolutions available in the stream
 async function parseHlsMasterManifest(m3u8Url, refererUrl, cookieHeader) {
   const variants = {};
   try {
@@ -398,9 +384,7 @@ async function streamHlsSegmentsToResponse(variantM3u8Url, refererUrl, cookieHea
   res.end();
 }
 
-// Tier 1: Native YouTube InnerTube, Dailymotion Player API & Eporner JSON API
 async function resolveViaPublicPlatformApis(targetUrl) {
-  // 1A. YouTube InnerTube Player API
   const ytMatch =
     targetUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ||
     targetUrl.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/) ||
@@ -524,7 +508,6 @@ async function resolveViaPublicPlatformApis(targetUrl) {
     }
   }
 
-  // 1B. Dailymotion Player Metadata API
   const dmMatch =
     targetUrl.match(/dailymotion\.com\/(?:embed\/)?video\/([a-zA-Z0-9]+)/i) ||
     targetUrl.match(/dai\.ly\/([a-zA-Z0-9]+)/i);
@@ -604,87 +587,15 @@ async function resolveViaPublicPlatformApis(targetUrl) {
     } catch {}
   }
 
-  // 1C. Eporner Native JSON API (extracts 4K/1080p/720p/480p direct MP4s with exact sizes)
-  if (/eporner\.com/i.test(targetUrl)) {
-    try {
-      const pageRes = await fetch(targetUrl, {
-        headers: { 'User-Agent': BROWSER_UA, 'Cookie': DEFAULT_AGE_COOKIES },
-        signal: AbortSignal.timeout(6000)
-      });
-      if (pageRes.ok) {
-        const html = await pageRes.text();
-        const vidMatch = html.match(/vid\s*:\s*['"]([a-zA-Z0-9]+)['"]/i);
-        const hashMatch = html.match(/hash\s*:\s*['"]([0-9a-f]{32})['"]/i);
-        if (vidMatch && hashMatch) {
-          const vid = vidMatch[1];
-          const rawHash = hashMatch[1];
-          // Eporner base36 hash conversion
-          let encodedHash = '';
-          for (let i = 0; i < 32; i += 8) {
-            encodedHash += parseInt(rawHash.substring(i, i + 8), 16).toString(36);
-          }
-          const xhrRes = await fetch(
-            `https://www.eporner.com/xhr/video/${vid}?hash=${encodedHash}&device=generic&domain=www.eporner.com&fallback=false&embed=false&supportedFormats=mp4`,
-            { headers: { 'User-Agent': BROWSER_UA, 'Referer': targetUrl } }
-          );
-          if (xhrRes.ok) {
-            const epData = await xhrRes.json();
-            const mp4Map = epData?.sources?.mp4 || {};
-            const verifiedDirectMap = {};
-            const videoFormats = [];
-            Object.entries(mp4Map).forEach(([label, obj]) => {
-              const resMatch = label.match(/(\d{3,4})p/i);
-              const res = resMatch ? snapToStandardResolution(resMatch[1]) : 720;
-              if (res && obj?.src) {
-                verifiedDirectMap[res] = { url: obj.src, filesize: null };
-                videoFormats.push({
-                  resolution: res,
-                  ext: 'mp4',
-                  codec: 'Video (H.264 + AAC)',
-                  sizeText: obj.size || null
-                });
-              }
-            });
-            videoFormats.sort((a, b) => b.resolution - a.resolution);
-            if (videoFormats.length > 0) {
-              const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-              const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-              return {
-                title: decodeHtmlEntities(ogTitle ? ogTitle[1] : humanizeUrlSlug(targetUrl)),
-                extractor: 'Eporner',
-                uploader: 'Eporner',
-                duration: 'HD Video',
-                thumbnail: ogImage ? ogImage[1] : '',
-                resolutions: videoFormats.map(v => v.resolution),
-                videoFormats,
-                audioFormats: [
-                  { bitrate: 320, label: '320 kbps', desc: 'MP3 High Bitrate Audio' },
-                  { bitrate: 192, label: '192 kbps', desc: 'MP3 Standard Stereo Audio' },
-                  { bitrate: 128, label: '128 kbps', desc: 'MP3 Compact Audio' }
-                ],
-                verifiedDirectMap,
-                hlsVariantsByRes: {},
-                hlsStreams: [],
-                childPages: [],
-                finalPageUrl: targetUrl,
-                cookieHeader: DEFAULT_AGE_COOKIES
-              };
-            }
-          }
-        }
-      }
-    } catch {}
-  }
-
   return null;
 }
 
-// extract streams from main player HTML while ignoring sidebar hover previews
+// extract streams from full page HTML (retaining all <script> blocks while ignoring hover-preview tags)
 function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams = []) {
-  const mainPlayerHtml = isolateMainPlayerHtml(rawHtml);
-  const unpacked = unpackDeanEdwards(mainPlayerHtml);
-  const b64Decoded = decodeInlineBase64Urls(mainPlayerHtml + '\n' + unpacked);
-  const combined = mainPlayerHtml + '\n' + unpacked + '\n' + b64Decoded;
+  const cleanedHtml = stripHoverPreviewTags(rawHtml);
+  const unpacked = unpackDeanEdwards(cleanedHtml);
+  const b64Decoded = decodeInlineBase64Urls(cleanedHtml + '\n' + unpacked);
+  const combined = cleanedHtml + '\n' + unpacked + '\n' + b64Decoded;
 
   const unescaped = combined
     .replace(/\\x([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
@@ -704,7 +615,28 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
 
   const fullText = unescaped + '\n' + urlDecodedExtras;
 
-  // 1. XVideos / XNXX (and all mirror domains) html5player signatures
+  // 0. OpenGraph, Twitter Stream & <link rel="preload" as="video"> (used by xhaccess, faphouse2, etc.)
+  const metaStreamRegex = /<meta[^>]+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["'][^>]+content=["']([^"']+)["']/gi;
+  let metaMatch;
+  while ((metaMatch = metaStreamRegex.exec(fullText)) !== null) {
+    const mUrl = resolveAbsoluteUrl(metaMatch[1].trim(), baseUrl);
+    if (mUrl && /^https?:\/\//i.test(mUrl) && !/\.(swf|html|php)(\?|$)/i.test(mUrl)) {
+      if (/\.m3u8(\?|$)/i.test(mUrl)) hlsStreams.push(mUrl);
+      else if (!directStreams[720]) directStreams[720] = mUrl;
+    }
+  }
+
+  const preloadVideoRegex = /<link[^>]+as=["']video["'][^>]+href=["']([^"']+)["']/gi;
+  let plMatch;
+  while ((plMatch = preloadVideoRegex.exec(fullText)) !== null) {
+    const pUrl = resolveAbsoluteUrl(plMatch[1].trim(), baseUrl);
+    if (pUrl && /^https?:\/\//i.test(pUrl)) {
+      if (/\.m3u8(\?|$)/i.test(pUrl)) hlsStreams.push(pUrl);
+      else if (!directStreams[720]) directStreams[720] = pUrl;
+    }
+  }
+
+  // 1. XVideos / XNXX html5player signatures
   const xvHigh = fullText.match(/setVideoUrlHigh\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvLow = fullText.match(/setVideoUrlLow\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvHls = fullText.match(/setVideoHLS\(\s*['"]([^'"]+)['"]\s*\)/i);
@@ -735,7 +667,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 4. xHamster & mirror domains (xhaccess.com, xhamster46.desi, etc.) window.initials
+  // 4. xHamster, FapHouse & mirror domains (faphouse2.com, xhaccess.com, xhamster46.desi) window.initials
   const initialsMatch = rawHtml.match(/window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
   if (initialsMatch) {
     try {
@@ -803,12 +735,12 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
-  // 6. <video> and <source> tags inside the isolated player region
+  // 6. <video> and <source> tags
   const html5VideoTagRegex = /<(?:video|source)[^>]+(?:src|data-src|data-video|data-mp4)=["']([^"']+)["'][^>]*>/gi;
   let vMatch;
   while ((vMatch = html5VideoTagRegex.exec(fullText)) !== null) {
     const rawTag = vMatch[0];
-    if (/preview|trailer|thumb|mouseover/i.test(rawTag)) continue;
+    if (/data-preview|mouseover/i.test(rawTag)) continue;
     const rawSrc = vMatch[1].trim();
     if (!rawSrc || rawSrc.startsWith('blob:') || rawSrc.startsWith('data:') || rawSrc === '#') continue;
     const srcUrl = resolveAbsoluteUrl(rawSrc, baseUrl);
@@ -870,17 +802,14 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
   return { directStreams, hlsStreams };
 }
 
-// I discover child embed iframes, /embed/<id> endpoints, and out-links on tube/aggregator pages
 function findChildMediaPages(html, baseUrl) {
   const candidates = [];
 
-  // 0. If the URL has a numeric video ID like /video/7156525/... (e.g. iceporn.net), probe /embed/7156525 directly
   try {
     const parsed = new URL(baseUrl);
     const idMatch = parsed.pathname.match(/\/(?:video|videos|watch|v|movie|clip)s?\/(\d{4,12})\b/i);
     if (idMatch?.[1]) {
       candidates.push(`${parsed.origin}/embed/${idMatch[1]}`);
-      candidates.push(`${parsed.origin}/embed/${idMatch[1]}/`);
     }
   } catch {}
 
@@ -910,226 +839,7 @@ function findChildMediaPages(html, baseUrl) {
   return [...new Set(candidates)].slice(0, 5);
 }
 
-function findLocalBrowserExecutable() {
-  if (IS_VERCEL) return null;
-  const candidates =
-    process.platform === 'win32'
-      ? [
-          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-          path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
-          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
-        ]
-      : [
-          '/usr/bin/google-chrome',
-          '/usr/bin/chromium-browser',
-          '/usr/bin/chromium',
-          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-        ];
-
-  return candidates.find(p => p && fs.existsSync(p)) || null;
-}
-
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const port = srv.address().port;
-      srv.close(() => resolve(port));
-    });
-    srv.on('error', reject);
-  });
-}
-
-// Headless Chrome/Edge DevTools Sniffer (filters out <1.5MB hover thumbnails automatically)
-async function inspectViaHeadlessBrowser(targetUrl) {
-  const browserBin = findLocalBrowserExecutable();
-  if (!browserBin) return null;
-
-  let proc = null;
-  const profileDir = path.join(TEMP_DIR, `chrome_prof_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
-
-  try {
-    const port = await getFreePort();
-    const args = [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profileDir}`,
-      '--headless=new',
-      '--disable-gpu',
-      '--mute-audio',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--ignore-certificate-errors',
-      '--autoplay-policy=no-user-gesture-required',
-      '--disable-blink-features=AutomationControlled',
-      `--user-agent=${BROWSER_UA}`,
-      targetUrl
-    ];
-
-    proc = spawn(browserBin, args, { stdio: 'ignore' });
-
-    let wsUrl = null;
-    for (let attempt = 0; attempt < 15; attempt++) {
-      await new Promise(r => setTimeout(r, 300));
-      try {
-        const listRes = await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(1000) });
-        if (listRes.ok) {
-          const targets = await listRes.json();
-          const pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
-          if (pageTarget) {
-            wsUrl = pageTarget.webSocketDebuggerUrl;
-            break;
-          }
-        }
-      } catch {}
-    }
-
-    if (!wsUrl || typeof WebSocket === 'undefined') {
-      return null;
-    }
-
-    const capturedDirect = {};
-    const capturedHls = new Set();
-    let domResult = null;
-
-    await new Promise(resolve => {
-      const ws = new WebSocket(wsUrl);
-      let msgId = 1;
-
-      const sendCmd = (method, params = {}) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ id: msgId++, method, params }));
-        }
-      };
-
-      const finish = () => {
-        try { ws.close(); } catch {}
-        resolve();
-      };
-
-      const timeout = setTimeout(finish, 7500);
-
-      ws.addEventListener('open', () => {
-        sendCmd('Network.enable');
-        sendCmd('Page.enable');
-
-        setTimeout(() => {
-          const jsExpr = `(() => {
-            try {
-              document.querySelectorAll('.vjs-big-play-button, .fp-play, .kt-play, [class*="play"], [id*="play"], button').forEach(b => {
-                const txt = (b.innerText || b.className || b.id || '').toLowerCase();
-                if (/play|watch|enter|agree|18|yes|continue/.test(txt)) b.click();
-              });
-              document.querySelectorAll('video').forEach(v => {
-                if (v.clientWidth >= 260 || !v.hasAttribute('data-preview')) {
-                  try { v.play(); } catch {}
-                }
-              });
-            } catch {}
-            // only collect <video> elements that are large main players, ignoring small thumbnail preview videos
-            const vids = Array.from(document.querySelectorAll('video')).filter(v => {
-              const rect = v.getBoundingClientRect();
-              return (rect.width === 0 || rect.width >= 260) && !v.hasAttribute('data-preview');
-            }).map(v => ({
-              src: v.currentSrc || v.src || v.getAttribute('data-src') || '',
-              label: v.getAttribute('label') || v.getAttribute('title') || ''
-            })).filter(v => v.src);
-            const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src).filter(Boolean);
-            return JSON.stringify({
-              locationHref: window.location.href,
-              title: document.title,
-              cookie: document.cookie,
-              html: document.documentElement.outerHTML.slice(0, 300000),
-              vids,
-              iframes
-            });
-          })()`;
-          sendCmd('Runtime.evaluate', { expression: jsExpr, returnByValue: true });
-        }, 3200);
-      });
-
-      ws.addEventListener('message', event => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          if (msg.method === 'Network.responseReceived') {
-            const resp = msg.params?.response || {};
-            const respUrl = resp.url || '';
-            const mime = (resp.mimeType || '').toLowerCase();
-            const contentLen = Number(resp.headers?.['content-length'] || resp.headers?.['Content-Length'] || 0);
-
-            if (/^https?:\/\//i.test(respUrl) && !isPreviewOrJunkUrl(respUrl)) {
-              if (mime.includes('mpegurl') || /\.m3u8(\?|$)/i.test(respUrl)) {
-                capturedHls.add(respUrl);
-              } else if (mime.startsWith('video/') && !mime.includes('mp2t')) {
-                // ignore tiny <1.5MB hover preview responses
-                if (contentLen === 0 || contentLen >= MIN_VALID_VIDEO_BYTES) {
-                  const resHit = respUrl.match(/[_/-](2160|1440|1080|720|480|360|240|144)p?\b/i);
-                  const r = resHit ? Number(resHit[1]) : 720;
-                  if (!capturedDirect[r]) capturedDirect[r] = respUrl;
-                }
-              }
-            }
-          }
-
-          if (msg.result?.result?.value) {
-            domResult = JSON.parse(msg.result.result.value);
-            setTimeout(() => {
-              clearTimeout(timeout);
-              finish();
-            }, 600);
-          }
-        } catch {}
-      });
-
-      ws.addEventListener('error', () => {
-        clearTimeout(timeout);
-        finish();
-      });
-    });
-
-    const directStreams = { ...capturedDirect };
-    const hlsStreams = [...capturedHls];
-    const finalUrl = domResult?.locationHref || targetUrl;
-
-    if (domResult?.html) {
-      extractStreamsFromHtml(domResult.html, finalUrl, directStreams, hlsStreams);
-    }
-
-    (domResult?.vids || []).forEach(v => {
-      if (!v.src || v.src.startsWith('blob:')) return;
-      const abs = resolveAbsoluteUrl(v.src, finalUrl);
-      if (/\.m3u8(\?|$)/i.test(abs)) {
-        hlsStreams.push(abs);
-      } else if (/^https?:\/\//i.test(abs) && !isPreviewOrJunkUrl(abs)) {
-        const resHit = (v.label || abs).match(/(2160|1440|1080|720|480|360|240|144)/);
-        const r = resHit ? Number(resHit[1]) : 720;
-        directStreams[r] = abs;
-      }
-    });
-
-    return {
-      title: domResult?.title || null,
-      finalUrl,
-      cookieHeader: domResult?.cookie || '',
-      iframes: domResult?.iframes || [],
-      directStreams,
-      hlsStreams: [...new Set(hlsStreams)]
-    };
-  } catch {
-    return null;
-  } finally {
-    if (proc) {
-      try { proc.kill('SIGKILL'); } catch {}
-    }
-    setTimeout(() => {
-      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
-    }, 2000);
-  }
-}
-
-// I verify direct MP4 streams and strictly reject any file under 1.5 MB so 0.2 MB hover previews are discarded
+// verify direct MP4 streams: reject >=200/206 files smaller than 1.5 MB, but NEVER delete a stream if a CDN blocks Vercel's AWS probe with 403/401
 async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHeader) {
   const verified = {};
   const entries = Object.entries(directStreams);
@@ -1148,8 +858,17 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
             ...(cookieHeader ? { Cookie: cookieHeader } : {})
           },
           redirect: 'follow',
-          signal: AbortSignal.timeout(4000)
+          signal: AbortSignal.timeout(3500)
         });
+
+        // if the CDN blocked Vercel's datacenter IP probe (403/401/429), keep the stream so the user's browser can download it directly
+        if (!probe.ok) {
+          verified[numRes] = {
+            url: streamUrl,
+            filesize: null
+          };
+          return;
+        }
 
         const contentType = (probe.headers.get('content-type') || '').toLowerCase();
         const contentRange = probe.headers.get('content-range') || '';
@@ -1160,7 +879,7 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
 
         try { probe.body?.cancel?.(); } catch {}
 
-        // reject HTML error pages and reject any video file smaller than 1.5 MB (hover trailers/stubs)
+        // when probe.ok is true (200/206), reject HTML pages or tiny hover-preview clips under 1.5 MB
         if (
           contentType.includes('text/html') ||
           contentType.includes('text/plain') ||
@@ -1186,11 +905,15 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
   return verified;
 }
 
+// fetch page HTML with parallel proxy relay fallback when a site blocks Vercel's AWS IP
 async function fetchHtmlWithFallback(targetUrl) {
   const parsed = new URL(targetUrl);
   let html = '';
   let cookieHeader = DEFAULT_AGE_COOKIES;
   let finalPageUrl = targetUrl;
+
+  const hasMediaSignatures = (txt) =>
+    Boolean(txt && txt.length > 800 && /<video|<source|video_url|xplayerSettings|window\.initials|setVideoUrl|mediaDefinitions|m3u8|\.mp4|<iframe/i.test(txt));
 
   try {
     const pageRes = await fetch(targetUrl, {
@@ -1202,7 +925,7 @@ async function fetchHtmlWithFallback(targetUrl) {
         'Cookie': DEFAULT_AGE_COOKIES
       },
       redirect: 'follow',
-      signal: AbortSignal.timeout(7500)
+      signal: AbortSignal.timeout(6500)
     });
 
     if (pageRes.url) finalPageUrl = pageRes.url;
@@ -1226,29 +949,30 @@ async function fetchHtmlWithFallback(targetUrl) {
     }
   } catch {}
 
-  if (!html || !/<video|<source|video_url|xplayerSettings|setVideoUrl|m3u8|\.mp4|<iframe/i.test(html)) {
-    const proxyRelays = [
+  if (!hasMediaSignatures(html)) {
+    const proxyUrls = [
       `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
     ];
 
-    for (const relayUrl of proxyRelays) {
-      try {
-        const relayRes = await fetch(relayUrl, {
-          headers: { 'User-Agent': BROWSER_UA },
-          signal: AbortSignal.timeout(6000)
-        });
-        if (relayRes.ok) {
-          const relayText = await relayRes.text();
-          if (relayText && relayText.length > 500) {
-            html = relayText;
-            if (/<video|<source|video_url|xplayerSettings|setVideoUrl|m3u8|\.mp4|<iframe/i.test(html)) {
-              break;
-            }
-          }
-        }
-      } catch {}
-    }
+    try {
+      const relayHtml = await Promise.any(
+        proxyUrls.map(async (pUrl) => {
+          const r = await fetch(pUrl, {
+            headers: { 'User-Agent': BROWSER_UA },
+            signal: AbortSignal.timeout(6000)
+          });
+          if (!r.ok) throw new Error('Relay status ' + r.status);
+          const text = await r.text();
+          if (!text || text.length < 600) throw new Error('Empty relay response');
+          return text;
+        })
+      );
+      if (relayHtml) {
+        html = relayHtml;
+      }
+    } catch {}
   }
 
   return { html, cookieHeader, finalPageUrl };
@@ -1273,7 +997,7 @@ async function inspectViaYtDlp(targetUrl) {
       `Cookie:${DEFAULT_AGE_COOKIES}`,
       targetUrl
     ],
-    22000
+    20000
   );
 
   const info = JSON.parse(rawJson);
@@ -1387,12 +1111,20 @@ async function inspectViaYtDlp(targetUrl) {
   };
 }
 
-// Deep HTML + /embed/<id> + Child Iframe + Headless Browser Inspector
-async function scrapePageDeep(targetUrl) {
+async function scrapePageDeep(targetUrl, providedHtml = '') {
   const parsed = new URL(targetUrl);
   const hostLabel = parsed.hostname.replace(/^www\./, '').toUpperCase();
 
-  let { html, cookieHeader, finalPageUrl } = await fetchHtmlWithFallback(targetUrl);
+  let html = providedHtml || '';
+  let cookieHeader = DEFAULT_AGE_COOKIES;
+  let finalPageUrl = targetUrl;
+
+  if (!html) {
+    const fetched = await fetchHtmlWithFallback(targetUrl);
+    html = fetched.html;
+    cookieHeader = fetched.cookieHeader;
+    finalPageUrl = fetched.finalPageUrl;
+  }
 
   const getMeta = prop => {
     const r1 = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i');
@@ -1445,10 +1177,8 @@ async function scrapePageDeep(targetUrl) {
     extractStreamsFromHtml(html, finalPageUrl, directStreams, hlsStreams);
   }
 
-  // verify any direct streams found on the main page (>1.5 MB check)
   let verifiedDirectMap = await verifyAndMeasureDirectStreams(directStreams, finalPageUrl, cookieHeader);
 
-  // crawl /embed/<id> and child iframes if no >1.5 MB stream or HLS stream was verified yet
   const childPages = html ? findChildMediaPages(html, finalPageUrl) : [];
   if (Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0 && childPages.length > 0) {
     for (const childUrl of childPages) {
@@ -1469,48 +1199,6 @@ async function scrapePageDeep(targetUrl) {
           );
           Object.assign(verifiedDirectMap, childVerified);
           if (Object.keys(verifiedDirectMap).length > 0 || hlsStreams.length > 0) break;
-        }
-      } catch {}
-    }
-  }
-
-  // if static HTML + /embed/<id> + child iframes still found 0 valid streams, launch Headless Chrome/Edge sniffer
-  if (!IS_VERCEL && Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0) {
-    const headlessData = await inspectViaHeadlessBrowser(targetUrl);
-    if (headlessData) {
-      if (headlessData.title && (!rawTitle || rawTitle.startsWith('Video on'))) {
-        rawTitle = headlessData.title;
-      }
-      if (headlessData.cookieHeader) {
-        cookieHeader += '; ' + headlessData.cookieHeader;
-      }
-      if (headlessData.finalUrl) {
-        finalPageUrl = headlessData.finalUrl;
-      }
-      (headlessData.iframes || []).forEach(iframeUrl => {
-        if (!childPages.includes(iframeUrl)) childPages.push(iframeUrl);
-      });
-      const headlessVerified = await verifyAndMeasureDirectStreams(
-        headlessData.directStreams || {},
-        finalPageUrl,
-        cookieHeader
-      );
-      Object.assign(verifiedDirectMap, headlessVerified);
-      (headlessData.hlsStreams || []).forEach(u => hlsStreams.push(u));
-    }
-  }
-
-  // if child iframe URLs were discovered (e.g. an external tube embed), try yt-dlp on the child iframe URL
-  if (Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0 && childPages.length > 0) {
-    for (const childUrl of childPages.slice(0, 3)) {
-      try {
-        const ytChild = await inspectViaYtDlp(childUrl);
-        if (ytChild && ytChild.videoFormats?.length > 0) {
-          return {
-            ...ytChild,
-            title: rawTitle && !rawTitle.startsWith('Video on') ? rawTitle : ytChild.title,
-            thumbnail: thumbnail || ytChild.thumbnail
-          };
         }
       } catch {}
     }

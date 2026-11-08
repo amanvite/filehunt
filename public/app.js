@@ -86,7 +86,6 @@
     };
   }
 
-  // I detect the domain name from the pasted URL to show a live source tag inside the search bar
   function detectHostLabel(rawInput) {
     if (!rawInput || rawInput.trim().length < 8) return null;
     try {
@@ -96,6 +95,28 @@
       return host.slice(0, 12).toUpperCase();
     } catch {
       return null;
+    }
+  }
+
+  // client-side residential IP HTML fetch fallback when a site blocks Vercel's datacenter IP
+  async function fetchClientHtmlViaRelay(targetUrl) {
+    const relays = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`
+    ];
+    try {
+      return await Promise.any(
+        relays.map(async (u) => {
+          const r = await fetch(u, { signal: AbortSignal.timeout(5500) });
+          if (!r.ok) throw new Error('Relay error');
+          const txt = await r.text();
+          if (!txt || txt.length < 600) throw new Error('Empty');
+          return txt;
+        })
+      );
+    } catch {
+      return '';
     }
   }
 
@@ -213,26 +234,35 @@
       }, 2500);
 
       try {
-        const res = await fetch('/api/info', {
+        let res = await fetch('/api/info', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: trimmed }),
           signal: controller.signal
         });
 
-        const rawText = await res.text();
-        let data = null;
-        try {
-          data = JSON.parse(rawText);
-        } catch {
-          throw new Error(
-            'We apologize, but FileHunt could not read this link right now. Please check the URL and try again.'
-          );
-        }
-
-        const hasStreams =
+        let data = await res.json().catch(() => null);
+        let hasStreams =
           (Array.isArray(data?.videoFormats) && data.videoFormats.length > 0) ||
           (Array.isArray(data?.resolutions) && data.resolutions.length > 0);
+
+        // If Vercel's datacenter IP was blocked by the target site, fetch via client browser relay and retry
+        if (!res.ok || !hasStreams) {
+          setLoadingStage('Bypassing host firewall via client relay...');
+          const clientHtml = await fetchClientHtmlViaRelay(trimmed);
+          if (clientHtml) {
+            res = await fetch('/api/info', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: trimmed, clientHtml }),
+              signal: controller.signal
+            });
+            data = await res.json().catch(() => null);
+            hasStreams =
+              (Array.isArray(data?.videoFormats) && data.videoFormats.length > 0) ||
+              (Array.isArray(data?.resolutions) && data.resolutions.length > 0);
+          }
+        }
 
         if (!res.ok || data?.error || !hasStreams) {
           setApologyText(
@@ -359,9 +389,14 @@
           return;
         }
 
+        const targetHref = data.directStreamUrl || data.downloadUrl;
         const a = document.createElement('a');
-        a.href = data.downloadUrl;
+        a.href = targetHref;
         a.download = data.filename || `${mediaData.title || 'video'}.mp4`;
+        if (data.directStreamUrl) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -440,7 +475,6 @@
           </div>
         </div>
 
-        <!-- Video & Audio Formats Displayed Together in a Modern Bento Matrix -->
         <div className="stream-group-header">
           <span>Available Video Streams (MP4)</span>
           <span>Codec & Size</span>
@@ -495,21 +529,23 @@
               const rowParams = { url: sourceUrl, title: mediaData.title, type: 'mp3', bitrate: item.bitrate };
               const rowKey = `mp3-${item.bitrate}`;
               return html`
-                <div key=${rowKey} className="stream-bento-row">
-                  <div className="stream-row-left">
-                    <span className="stream-format-name">MP3 ${item.label}</span>
-                    <span className="res-tag audio-tag">AUDIO</span>
-                    <span className="stream-spec-meta">${item.desc} • All Media Players</span>
-                  </div>
+                <div key=${rowKey}>
+                  <div className="stream-bento-row">
+                    <div className="stream-row-left">
+                      <span className="stream-format-name">MP3 ${item.label}</span>
+                      <span className="res-tag audio-tag">AUDIO</span>
+                      <span className="stream-spec-meta">${item.desc} • All Media Players</span>
+                    </div>
 
-                  <a
-                    href="#download"
-                    className="table-dl-btn audio-dl-btn"
-                    style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
-                    onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
-                  >
-                    ${busyKey === rowKey ? 'Extracting...' : 'Download MP3'}
-                  </a>
+                    <a
+                      href="#download"
+                      className="table-dl-btn audio-dl-btn"
+                      style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
+                      onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
+                    >
+                      ${busyKey === rowKey ? 'Extracting...' : 'Download MP3'}
+                    </a>
+                  </div>
                 </div>
               `;
             })}
@@ -688,13 +724,6 @@
 
     const BrandHeader = ({ subtitle }) => html`
       <div className="brand-header">
-        <div>
-          <span className="engine-status-pill">
-            <span className="engine-status-dot"></span>
-            <span>Universal Stream Engine • 1,800+ Sites Supported</span>
-          </span>
-        </div>
-
         ${selectedSite && activeView === 'home' && html`
           <div className="active-platform-pill visible">
             <span>${selectedSite} Mode</span>
