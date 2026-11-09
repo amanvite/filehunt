@@ -81,7 +81,6 @@ class LruCache {
   }
 }
 
-// automatically prepend https:// if the user pastes a domain link without http:// or https://
 function normalizeInputUrl(rawInput) {
   if (!rawInput) return '';
   let trimmed = String(rawInput).trim();

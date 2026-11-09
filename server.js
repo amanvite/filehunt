@@ -21,7 +21,11 @@ const express = require('express');
 const path = require('path');
 const { PORT, BROWSER_UA, BUILTIN_EXTRACTORS, normalizeInputUrl } = require('./src/config');
 const { initLocalBinaries } = require('./src/extractor');
-const { inspectMediaUrl, streamMediaToResponse } = require('./src/downloader');
+const {
+  inspectMediaUrl,
+  streamMediaToResponse,
+  handleInternalChunkProxy
+} = require('./src/downloader');
 
 const app = express();
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -42,7 +46,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     name: 'VideoHunt',
-    version: '8.5.0',
+    version: '9.0.0',
     runtime: 'local-node'
   });
 });
@@ -85,6 +89,16 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
+// GET /api/chunk-proxy - internal high-speed range-window proxy feeding local FFmpeg without CDN throttling
+app.get('/api/chunk-proxy', async (req, res) => {
+  try {
+    await handleInternalChunkProxy(req, res);
+  } catch {
+    if (!res.headersSent) res.status(502).end();
+    else try { res.end(); } catch {}
+  }
+});
+
 // POST /api/info - accepts links with or without http:// or https://
 app.post('/api/info', async (req, res) => {
   const { url } = req.body || {};
@@ -124,7 +138,7 @@ app.post('/api/info', async (req, res) => {
   });
 });
 
-// GET /api/download - streams directly to Chrome's download manager with continuous packet flushing
+// GET /api/download - starts browser download immediately with continuous unthrottled packet flow
 app.get('/api/download', async (req, res) => {
   const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192' } = req.query || {};
   if (!url) {
@@ -151,7 +165,7 @@ app.use((req, res) => {
 initLocalBinaries();
 
 const server = app.listen(PORT, () => {
-  console.log(`VideoHunt v8.5 running at http://localhost:${PORT}`);
+  console.log(`VideoHunt v9.0 running at http://localhost:${PORT}`);
 });
 
 server.timeout = 0;

@@ -11,6 +11,13 @@
     </svg>
   `;
 
+  const SearchButtonIcon = () => html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7"></circle>
+      <line x1="20" y1="20" x2="16.2" y2="16.2"></line>
+    </svg>
+  `;
+
   const YouTubeIcon = () => html`
     <svg viewBox="0 0 24 24">
       <path d="M21.58 7.19c-.23-.86-.91-1.54-1.77-1.77C18.25 5 12 5 12 5s-6.25 0-7.81.42c-.86.23-1.54.91-1.77 1.77C2 8.75 2 12 2 12s0 3.25.42 4.81c.23.86.91 1.54 1.77 1.77C5.75 19 12 19 12 19s6.25 0 7.81-.42c.86-.23 1.54-.91 1.77-1.77C22 15.25 22 12 22 12s0-3.25-.42-4.81zM10 15V9l5.2 3-5.2 3z" />
@@ -79,7 +86,6 @@
     };
   }
 
-  // normalize links with or without https:// so youtube.com/watch?v=... works seamlessly
   function normalizeClientUrl(rawInput) {
     if (!rawInput) return '';
     const trimmed = String(rawInput).trim();
@@ -561,7 +567,7 @@
             <span className="brand-name">VideoHunt</span>
           </a>
         </div>
-        <h1 className="page-subtitle">${subtitle}</h1>
+        ${subtitle && html`<h1 className="page-subtitle">${subtitle}</h1>`}
       </div>
     `;
 
@@ -571,9 +577,7 @@
 
           ${activeView === 'home' && html`
             <section className="view-panel active">
-              <${BrandHeader}
-                subtitle=${selectedSite ? `${selectedSite} Video Downloader` : 'Free Online Video Downloader'}
-              />
+              <${BrandHeader} subtitle=${selectedSite ? `${selectedSite} Video Downloader` : ''} />
 
               <div className="search-box-wrap">
                 <form className="google-omnibox" onSubmit=${handleFormSubmit} autoComplete="off" noValidate>
@@ -609,14 +613,22 @@
                       ×
                     </button>
                   `}
-                  <button type="submit" className="omnibox-submit-btn" disabled=${isLoading}>
-                    ${isLoading ? 'Searching...' : 'Search'}
+                  <button
+                    type="submit"
+                    className="omnibox-search-btn"
+                    title="Search video streams"
+                    aria-label="Search video streams"
+                    disabled=${isLoading}
+                  >
+                    ${isLoading
+                      ? html`<span className="btn-spinner"></span>`
+                      : html`<${SearchButtonIcon} />`}
                   </button>
                 </form>
 
                 <p className="supported-sites-notice">
-                  Supports high-speed media extraction across YouTube, Instagram, X, TikTok, Vimeo, Dailymotion, and${' '}
-                  <a onClick=${() => switchView('sites')}>170+ supported platforms</a>.
+                  Compatible with YouTube, Instagram, X, TikTok, Vimeo, and${' '}
+                  <a onClick=${() => switchView('sites')}>170+ platforms</a>.
                 </p>
               </div>
 

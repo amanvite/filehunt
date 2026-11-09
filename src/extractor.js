@@ -1101,7 +1101,7 @@ async function fetchPageHtml(targetUrl) {
   return { html, cookieHeader, finalPageUrl };
 }
 
-// Tier 2: Inspect via yt-dlp --dump-single-json (without overriding YouTube's internal mobile User-Agent!)
+// Tier 2: Inspect via yt-dlp --dump-single-json and compute exact H.264 video + audio combined sizes
 async function inspectViaYtDlp(targetUrl) {
   const parsed = new URL(targetUrl);
   const cleanHost = parsed.hostname.replace(/^www\./, '').toUpperCase();
@@ -1115,7 +1115,6 @@ async function inspectViaYtDlp(targetUrl) {
     '--geo-bypass'
   ];
 
-  // only pass custom desktop User-Agent & Cookie on non-YouTube sites so yt-dlp's native Android/iOS client works at full speed
   if (!isYouTube) {
     ytArgs.push(
       '--referer',
@@ -1141,14 +1140,9 @@ async function inspectViaYtDlp(targetUrl) {
   let bestAudioUa = BROWSER_UA;
   let bestAudioScore = -1;
 
+  // Pass 1: find best audio-only stream first so we can add its exact byte size to DASH video tracks
   (info.formats || []).forEach(f => {
     if (!f.url || !/^https?:\/\//i.test(f.url)) return;
-
-    const formatUa =
-      f.http_headers?.['User-Agent'] ||
-      f.http_headers?.['user-agent'] ||
-      BROWSER_UA;
-
     const hasVideo = Boolean(f.vcodec && f.vcodec !== 'none');
     const hasAudio = Boolean(f.acodec && f.acodec !== 'none');
     const isM3u8 = /\.m3u8(\?|$)/i.test(f.url) || String(f.protocol || '').includes('m3u8');
@@ -1164,10 +1158,27 @@ async function inspectViaYtDlp(targetUrl) {
           bestAudioScore = score;
           bestAudioUrl = f.url;
           bestAudioSize = f.filesize || f.filesize_approx || null;
-          bestAudioUa = formatUa;
+          bestAudioUa =
+            f.http_headers?.['User-Agent'] ||
+            f.http_headers?.['user-agent'] ||
+            BROWSER_UA;
         }
       }
     }
+  });
+
+  // Pass 2: collect video streams and calculate accurate H.264 + audio byte sizes
+  (info.formats || []).forEach(f => {
+    if (!f.url || !/^https?:\/\//i.test(f.url)) return;
+
+    const formatUa =
+      f.http_headers?.['User-Agent'] ||
+      f.http_headers?.['user-agent'] ||
+      BROWSER_UA;
+
+    const hasVideo = Boolean(f.vcodec && f.vcodec !== 'none');
+    const hasAudio = Boolean(f.acodec && f.acodec !== 'none');
+    const isM3u8 = /\.m3u8(\?|$)/i.test(f.url) || String(f.protocol || '').includes('m3u8');
 
     if (hasVideo && (f.height || f.format_note || f.url)) {
       if (isPreviewOrJunkUrl(f.url) && !isM3u8) return;
@@ -1180,24 +1191,29 @@ async function inspectViaYtDlp(targetUrl) {
         : 720;
 
       const res = snapToStandardResolution(rawDim) || 720;
-      const sizeBytes =
+      const rawVideoBytes =
         f.filesize ||
         f.filesize_approx ||
         (f.tbr && durationSec ? Math.round(((f.tbr * 1000) / 8) * durationSec) : null);
 
-      if (sizeBytes && sizeBytes > 0 && sizeBytes < MIN_VALID_VIDEO_BYTES) return;
+      const combinedBytes =
+        rawVideoBytes && !hasAudio && bestAudioSize
+          ? rawVideoBytes + bestAudioSize
+          : rawVideoBytes;
+
+      if (combinedBytes && combinedBytes > 0 && combinedBytes < MIN_VALID_VIDEO_BYTES) return;
 
       const isH264 = /^avc1|h264/i.test(f.vcodec || '');
       const existing = resolutionMap.get(res);
 
-      if (!existing || (isH264 && !existing.isH264) || (sizeBytes && !existing.sizeBytes)) {
+      if (!existing || (isH264 && !existing.isH264) || ( isH264 === existing.isH264 && combinedBytes && !existing.sizeBytes)) {
         resolutionMap.set(res, {
           resolution: res,
           ext: 'mp4',
           isH264,
           codec: 'Video (H.264 + AAC)',
-          sizeBytes,
-          sizeText: formatBytes(sizeBytes)
+          sizeBytes: combinedBytes,
+          sizeText: formatBytes(combinedBytes)
         });
       }
 
@@ -1207,6 +1223,7 @@ async function inspectViaYtDlp(targetUrl) {
           progressiveSize: null,
           videoUrl: null,
           videoSize: null,
+          videoIsH264: false,
           userAgent: formatUa,
           hlsUrl: null
         };
@@ -1224,9 +1241,10 @@ async function inspectViaYtDlp(targetUrl) {
           streamsByRes[res].userAgent = formatUa;
         }
       } else {
-        if (!streamsByRes[res].videoUrl || isH264) {
+        if (!streamsByRes[res].videoUrl || (isH264 && !streamsByRes[res].videoIsH264)) {
           streamsByRes[res].videoUrl = f.url;
-          streamsByRes[res].videoSize = f.filesize || null;
+          streamsByRes[res].videoSize = f.filesize || f.filesize_approx || null;
+          streamsByRes[res].videoIsH264 = isH264;
           streamsByRes[res].userAgent = formatUa;
         }
       }
