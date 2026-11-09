@@ -1,7 +1,7 @@
 {
   "name": "filehunt",
-  "version": "5.0.0",
-  "description": "FileHunt - Universal Online Video Downloader",
+  "version": "6.0.0",
+  "description": "FileHunt - Local Universal Video & Audio Downloader",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,6 +11,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "ffmpeg-static": "^5.2.0"
   }
 }

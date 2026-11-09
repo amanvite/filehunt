@@ -2,8 +2,9 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const { spawn } = require('child_process');
+const { Readable } = require('stream');
+const { finished } = require('stream/promises');
 const {
-  IS_VERCEL,
   TEMP_DIR,
   BROWSER_UA,
   DEFAULT_AGE_COOKIES,
@@ -16,22 +17,24 @@ const {
   resolveAbsoluteUrl
 } = require('./config');
 
-const BINARY_FILENAME =
-  process.platform === 'win32'
-    ? 'yt-dlp.exe'
-    : process.arch === 'arm64'
-    ? 'yt-dlp_linux_aarch64'
-    : 'yt-dlp_linux';
-
+const BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const LOCAL_YTDLP_BIN = path.join(TEMP_DIR, BINARY_FILENAME);
 
 let resolvedYtDlpCmd = null;
 let ytdlpDownloadPromise = null;
 let resolvedFfmpegPath = null;
 
+// resolve bundled ffmpeg-static binary or system ffmpeg
 function getLocalFfmpegPath() {
-  if (IS_VERCEL) return null;
   if (resolvedFfmpegPath) return resolvedFfmpegPath;
+
+  try {
+    const candidate = require('ffmpeg-static');
+    if (candidate && fs.existsSync(candidate)) {
+      resolvedFfmpegPath = candidate;
+      return resolvedFfmpegPath;
+    }
+  } catch {}
 
   const winCandidates = [
     path.join(TEMP_DIR, 'ffmpeg.exe'),
@@ -48,6 +51,7 @@ function getLocalFfmpegPath() {
   return null;
 }
 
+// automatically download standalone yt-dlp.exe into temp/ if not already installed
 async function ensureYtDlpBinary() {
   if (resolvedYtDlpCmd && (resolvedYtDlpCmd === 'yt-dlp' || fs.existsSync(resolvedYtDlpCmd))) {
     return resolvedYtDlpCmd;
@@ -60,29 +64,28 @@ async function ensureYtDlpBinary() {
     }
   } catch {}
 
-  if (!IS_VERCEL) {
-    const hasGlobal = await new Promise(resolve => {
-      try {
-        const p = spawn('yt-dlp', ['--version']);
-        p.on('error', () => resolve(false));
-        p.on('close', code => resolve(code === 0));
-      } catch {
-        resolve(false);
-      }
-    });
-
-    if (hasGlobal) {
-      resolvedYtDlpCmd = 'yt-dlp';
-      return resolvedYtDlpCmd;
+  const hasGlobal = await new Promise(resolve => {
+    try {
+      const p = spawn('yt-dlp', ['--version']);
+      p.on('error', () => resolve(false));
+      p.on('close', code => resolve(code === 0));
+    } catch {
+      resolve(false);
     }
+  });
+
+  if (hasGlobal) {
+    resolvedYtDlpCmd = 'yt-dlp';
+    return resolvedYtDlpCmd;
   }
 
   if (!ytdlpDownloadPromise) {
     ytdlpDownloadPromise = (async () => {
       const releaseUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${BINARY_FILENAME}`;
+      console.log('Downloading standalone yt-dlp binary into temp/ folder...');
       const res = await fetch(releaseUrl, {
         redirect: 'follow',
-        signal: AbortSignal.timeout(15000)
+        signal: AbortSignal.timeout(30000)
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -91,6 +94,7 @@ async function ensureYtDlpBinary() {
       if (process.platform !== 'win32') {
         fs.chmodSync(LOCAL_YTDLP_BIN, 0o755);
       }
+      console.log('Standalone yt-dlp binary ready.');
       resolvedYtDlpCmd = LOCAL_YTDLP_BIN;
       return resolvedYtDlpCmd;
     })().catch(() => {
@@ -103,13 +107,11 @@ async function ensureYtDlpBinary() {
 }
 
 function initLocalBinaries() {
-  if (!IS_VERCEL) {
-    getLocalFfmpegPath();
-    ensureYtDlpBinary();
-  }
+  getLocalFfmpegPath();
+  ensureYtDlpBinary();
 }
 
-async function runYtDlp(args, timeoutMs = 45000) {
+async function runYtDlp(args, timeoutMs = 180000) {
   const cmd = await ensureYtDlpBinary();
   if (!cmd) throw new Error('yt-dlp binary unavailable');
   const ffmpegBin = getLocalFfmpegPath();
@@ -149,17 +151,102 @@ async function runYtDlp(args, timeoutMs = 45000) {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        if (code === 0 && stdout.trim()) resolve(stdout);
+        if (code === 0) resolve(stdout);
         else reject(new Error(stderr || `yt-dlp exited with code ${code}`));
       }
     });
   });
 }
 
+// direct ffmpeg stream remuxer for HLS (.m3u8) or custom MP4 streams when yt-dlp doesn't support a site
+function runFfmpegDirectMux(streamUrl, refererUrl, cookieHeader, outFilePath, isMp3 = false, bitrate = '192') {
+  return new Promise((resolve, reject) => {
+    const ffmpegBin = getLocalFfmpegPath();
+    if (!ffmpegBin) return reject(new Error('ffmpeg binary not found'));
+
+    let headersStr = `User-Agent: ${BROWSER_UA}\r\n`;
+    if (refererUrl) headersStr += `Referer: ${refererUrl}\r\n`;
+    if (cookieHeader) headersStr += `Cookie: ${cookieHeader}\r\n`;
+
+    const args = ['-y', '-headers', headersStr, '-i', streamUrl];
+
+    if (isMp3) {
+      args.push('-vn', '-acodec', 'libmp3lame', '-b:a', `${bitrate}k`, outFilePath);
+    } else {
+      args.push('-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', outFilePath);
+    }
+
+    let settled = false;
+    const proc = spawn(ffmpegBin, args);
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { proc.kill(); } catch {}
+        reject(new Error('ffmpeg mux timeout'));
+      }
+    }, 240000);
+
+    proc.on('error', err => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
+    proc.on('close', code => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        const minSize = isMp3 ? 50000 : MIN_VALID_VIDEO_BYTES;
+        if (code === 0 && fs.existsSync(outFilePath) && fs.statSync(outFilePath).size >= minSize) {
+          resolve(outFilePath);
+        } else {
+          try { fs.unlinkSync(outFilePath); } catch {}
+          reject(new Error(`ffmpeg exited with code ${code}`));
+        }
+      }
+    });
+  });
+}
+
+// download a verified direct MP4 stream into temp/ with Referer and Cookie headers
+async function downloadDirectStreamToFile(streamUrl, refererUrl, cookieHeader, outFilePath) {
+  const res = await fetch(streamUrl, {
+    headers: {
+      'User-Agent': BROWSER_UA,
+      'Referer': refererUrl,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {})
+    },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(240000)
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Direct stream HTTP ${res.status}`);
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('text/html')) {
+    throw new Error('Direct stream returned HTML instead of video');
+  }
+
+  const fileStream = fs.createWriteStream(outFilePath);
+  await finished(Readable.fromWeb(res.body).pipe(fileStream));
+
+  const stat = fs.statSync(outFilePath);
+  if (stat.size < MIN_VALID_VIDEO_BYTES) {
+    try { fs.unlinkSync(outFilePath); } catch {}
+    throw new Error('Downloaded file smaller than minimum valid video threshold');
+  }
+
+  return outFilePath;
+}
+
 function isPreviewOrJunkUrl(candidateUrl) {
   if (!candidateUrl) return true;
   return (
-    /\.m3u8|_preview\.|-preview\.|\/previews\/|\/thumbs\/|\/t\/|sprite|banner|logo|_TPL_/i.test(
+    /\.m3u8|_preview\.|-preview\.|\/previews\/|\/thumbs\/|\/t\/|trailer|teaser|sprite|banner|logo|_TPL_/i.test(
       candidateUrl
     ) ||
     /\.(jpg|jpeg|png|webp|gif|svg|css|js|vtt|srt|xml|html|php|json|ico)(\?|$)/i.test(candidateUrl)
@@ -220,6 +307,7 @@ function decodeInlineBase64Urls(text) {
   return decodedExtras;
 }
 
+// KVS (kt_player) function/0/ token decrypter
 function decodeKvsUrl(rawUrl, licenseCode) {
   if (!rawUrl) return '';
   if (!rawUrl.startsWith('function/0/')) return rawUrl;
@@ -334,389 +422,6 @@ async function parseHlsMasterManifest(m3u8Url, refererUrl, cookieHeader) {
   return variants;
 }
 
-async function streamHlsSegmentsToResponse(variantM3u8Url, refererUrl, cookieHeader, res, filename) {
-  const plRes = await fetch(variantM3u8Url, {
-    headers: {
-      'User-Agent': BROWSER_UA,
-      'Referer': refererUrl,
-      ...(cookieHeader ? { Cookie: cookieHeader } : {})
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(6000)
-  });
-
-  if (!plRes.ok) throw new Error('Failed to fetch HLS media playlist');
-  const plText = await plRes.text();
-  const baseUrl = plRes.url || variantM3u8Url;
-
-  const segmentUrls = plText
-    .split(/\r?\n/)
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#'))
-    .map(seg => resolveAbsoluteUrl(seg, baseUrl))
-    .filter(Boolean);
-
-  if (segmentUrls.length === 0) {
-    throw new Error('No media segments found in HLS playlist');
-  }
-
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Type', 'application/octet-stream');
-
-  for (const segUrl of segmentUrls.slice(0, 140)) {
-    if (res.writableEnded || res.destroyed) break;
-    const segRes = await fetch(segUrl, {
-      headers: {
-        'User-Agent': BROWSER_UA,
-        'Referer': refererUrl,
-        ...(cookieHeader ? { Cookie: cookieHeader } : {})
-      },
-      signal: AbortSignal.timeout(10000)
-    });
-    if (segRes.ok) {
-      const buf = Buffer.from(await segRes.arrayBuffer());
-      res.write(buf);
-    }
-  }
-
-  res.end();
-}
-
-// Multi-tier YouTube resolver that works on Vercel datacenter IPs (Embed VisitorData + InnerTube + Piped/Invidious fallback)
-async function resolveYouTubeMultiEngine(videoId, targetUrl) {
-  // Step 1: Fetch embed page to harvest a valid visitorData token & encrypted sts signature timestamp
-  let visitorData = '';
-  let sts = null;
-  try {
-    const embedRes = await fetch(`https://www.youtube.com/embed/${videoId}`, {
-      headers: {
-        'User-Agent': BROWSER_UA,
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      signal: AbortSignal.timeout(4000)
-    });
-    if (embedRes.ok) {
-      const embedHtml = await embedRes.text();
-      const vdMatch = embedHtml.match(/"VISITOR_DATA"\s*:\s*"([^"]+)"/i);
-      const stsMatch = embedHtml.match(/"sts"\s*:\s*(\d+)/i);
-      if (vdMatch?.[1]) visitorData = vdMatch[1];
-      if (stsMatch?.[1]) sts = Number(stsMatch[1]);
-    }
-  } catch {}
-
-  const clients = [
-    {
-      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-      clientVersion: '2.0',
-      userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/11.50) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15',
-      isEmbedded: true
-    },
-    {
-      clientName: 'IOS',
-      clientVersion: '19.45.4',
-      deviceMake: 'Apple',
-      deviceModel: 'iPhone16,2',
-      osName: 'iPhone',
-      osVersion: '18.1.0.22B83',
-      userAgent: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1 like Mac OS X;)'
-    },
-    {
-      clientName: 'ANDROID_VR',
-      clientVersion: '1.60.19',
-      androidSdkVersion: 34,
-      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1; Cronet/119.0.6045.194)'
-    },
-    {
-      clientName: 'ANDROID_TESTSUITE',
-      clientVersion: '1.9',
-      androidSdkVersion: 30,
-      userAgent: 'com.google.android.youtube/1.9 (Linux; U; Android 11; en_US)'
-    }
-  ];
-
-  for (const client of clients) {
-    try {
-      const bodyPayload = {
-        videoId,
-        racyCheckOk: true,
-        contentCheckOk: true,
-        context: {
-          client: {
-            clientName: client.clientName,
-            clientVersion: client.clientVersion,
-            hl: 'en',
-            gl: 'US',
-            ...(visitorData ? { visitorData } : {}),
-            ...(client.androidSdkVersion ? { androidSdkVersion: client.androidSdkVersion } : {}),
-            ...(client.deviceMake
-              ? {
-                  deviceMake: client.deviceMake,
-                  deviceModel: client.deviceModel,
-                  osName: client.osName,
-                  osVersion: client.osVersion
-                }
-              : {})
-          },
-          ...(client.isEmbedded
-            ? {
-                thirdParty: {
-                  embedUrl: 'https://www.youtube.com/'
-                }
-              }
-            : {})
-        },
-        ...(sts ? { playbackContext: { contentPlaybackContext: { signatureTimestamp: sts } } } : {})
-      };
-
-      const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': client.userAgent,
-          ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {})
-        },
-        body: JSON.stringify(bodyPayload),
-        signal: AbortSignal.timeout(5000)
-      });
-
-      if (!res.ok) continue;
-      const data = await res.json();
-      const details = data?.videoDetails;
-      const streamingData = data?.streamingData;
-      if (!details || !streamingData) continue;
-
-      const durationSec = Number(details.lengthSeconds) || null;
-      const allFormats = [
-        ...(streamingData.formats || []),
-        ...(streamingData.adaptiveFormats || [])
-      ];
-
-      const resolutionMap = new Map();
-      const verifiedDirectMap = {};
-
-      allFormats.forEach(f => {
-        if (f.mimeType && f.mimeType.startsWith('video/') && f.url) {
-          const rawHeight = f.height || parseInt(String(f.qualityLabel || ''), 10);
-          const normRes = snapToStandardResolution(rawHeight);
-          if (!normRes) return;
-
-          const sizeBytes =
-            Number(f.contentLength) ||
-            (f.bitrate && durationSec ? Math.round((f.bitrate / 8) * durationSec) : null);
-          const hasAudio = Boolean(f.audioQuality);
-
-          const existing = resolutionMap.get(normRes);
-          if (!existing || (hasAudio && !existing.hasAudio) || (sizeBytes && !existing.sizeBytes)) {
-            resolutionMap.set(normRes, {
-              resolution: normRes,
-              ext: 'mp4',
-              hasAudio,
-              codec: 'Video (H.264 + AAC)',
-              sizeBytes,
-              sizeText: formatBytes(sizeBytes)
-            });
-          }
-
-          if (hasAudio || !verifiedDirectMap[normRes]) {
-            verifiedDirectMap[normRes] = {
-              url: f.url,
-              filesize: sizeBytes
-            };
-          }
-        }
-      });
-
-      const videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
-      if (videoFormats.length === 0) continue;
-
-      return {
-        title: details.title || 'YouTube Video',
-        extractor: 'YouTube',
-        uploader: details.author || 'YouTube',
-        duration: formatDuration(durationSec) || 'Video',
-        thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-        resolutions: videoFormats.map(v => v.resolution),
-        videoFormats,
-        audioFormats: [
-          { bitrate: 320, label: '320 kbps', desc: 'MP3 High Bitrate Audio' },
-          { bitrate: 192, label: '192 kbps', desc: 'MP3 Standard Stereo Audio' },
-          { bitrate: 128, label: '128 kbps', desc: 'MP3 Compact Audio' }
-        ],
-        verifiedDirectMap,
-        hlsVariantsByRes: {},
-        hlsStreams: streamingData.hlsManifestUrl ? [streamingData.hlsManifestUrl] : [],
-        childPages: [],
-        finalPageUrl: targetUrl,
-        cookieHeader: DEFAULT_AGE_COOKIES
-      };
-    } catch {}
-  }
-
-  // Step 2: Public Piped / Invidious API fallback if YouTube blocked the Vercel AWS IP
-  const pipedInstances = [
-    `https://pipedapi.kavin.rocks/streams/${videoId}`,
-    `https://pipedapi.tokhmi.xyz/streams/${videoId}`,
-    `https://pipedapi.moomoo.me/streams/${videoId}`,
-    `https://inv.tux.pizza/api/v1/videos/${videoId}`,
-    `https://invidious.nerdvpn.de/api/v1/videos/${videoId}`
-  ];
-
-  for (const apiEndpoint of pipedInstances) {
-    try {
-      const pRes = await fetch(apiEndpoint, {
-        headers: { 'User-Agent': BROWSER_UA },
-        signal: AbortSignal.timeout(4500)
-      });
-      if (!pRes.ok) continue;
-      const pData = await pRes.json();
-
-      const durationSec = Number(pData.duration || pData.lengthSeconds) || null;
-      const resolutionMap = new Map();
-      const verifiedDirectMap = {};
-
-      // Piped format
-      const streamsList = pData.videoStreams || pData.formatStreams || [];
-      streamsList.forEach(s => {
-        if (!s?.url) return;
-        const rawRes = parseInt(String(s.quality || s.resolution || ''), 10);
-        const normRes = snapToStandardResolution(rawRes);
-        if (!normRes) return;
-        const hasAudio = s.videoOnly === false || Boolean(s.audioQuality) || Array.isArray(pData.formatStreams);
-        const existing = resolutionMap.get(normRes);
-        if (!existing || (hasAudio && !existing.hasAudio)) {
-          resolutionMap.set(normRes, {
-            resolution: normRes,
-            ext: 'mp4',
-            hasAudio,
-            codec: 'Video (H.264 + AAC)',
-            sizeText: null
-          });
-          verifiedDirectMap[normRes] = { url: s.url, filesize: null };
-        }
-      });
-
-      const videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
-      if (videoFormats.length > 0) {
-        return {
-          title: pData.title || 'YouTube Video',
-          extractor: 'YouTube',
-          uploader: pData.uploader || pData.author || 'YouTube',
-          duration: formatDuration(durationSec) || 'Video',
-          thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-          resolutions: videoFormats.map(v => v.resolution),
-          videoFormats,
-          audioFormats: [
-            { bitrate: 320, label: '320 kbps', desc: 'MP3 High Bitrate Audio' },
-            { bitrate: 192, label: '192 kbps', desc: 'MP3 Standard Stereo Audio' },
-            { bitrate: 128, label: '128 kbps', desc: 'MP3 Compact Audio' }
-          ],
-          verifiedDirectMap,
-          hlsVariantsByRes: {},
-          hlsStreams: pData.hls ? [pData.hls] : [],
-          childPages: [],
-          finalPageUrl: targetUrl,
-          cookieHeader: DEFAULT_AGE_COOKIES
-        };
-      }
-    } catch {}
-  }
-
-  return null;
-}
-
-async function resolveViaPublicPlatformApis(targetUrl) {
-  const ytMatch =
-    targetUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/) ||
-    targetUrl.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/) ||
-    targetUrl.match(/youtube\.com\/(?:shorts|embed)\/([a-zA-Z0-9_-]{11})/);
-
-  if (ytMatch) {
-    const ytData = await resolveYouTubeMultiEngine(ytMatch[1], targetUrl);
-    if (ytData) return ytData;
-  }
-
-  const dmMatch =
-    targetUrl.match(/dailymotion\.com\/(?:embed\/)?video\/([a-zA-Z0-9]+)/i) ||
-    targetUrl.match(/dai\.ly\/([a-zA-Z0-9]+)/i);
-
-  if (dmMatch) {
-    const videoId = dmMatch[1];
-    try {
-      const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`, {
-        headers: { 'User-Agent': BROWSER_UA },
-        signal: AbortSignal.timeout(5000)
-      });
-      if (metaRes.ok) {
-        const meta = await metaRes.json();
-        const durationSec = Number(meta.duration) || null;
-        const qualities = meta.qualities || {};
-        const verifiedDirectMap = {};
-        const hlsStreams = [];
-        const resolutionMap = new Map();
-
-        Object.entries(qualities).forEach(([qKey, streamList]) => {
-          if (!Array.isArray(streamList)) return;
-          const numRes = snapToStandardResolution(parseInt(qKey, 10));
-          streamList.forEach(entry => {
-            if (!entry?.url) return;
-            if (entry.type === 'application/x-mpegURL' || /\.m3u8/i.test(entry.url)) {
-              hlsStreams.push(entry.url);
-            } else if (numRes) {
-              verifiedDirectMap[numRes] = { url: entry.url, filesize: null };
-            }
-          });
-          if (numRes) {
-            resolutionMap.set(numRes, {
-              resolution: numRes,
-              ext: 'mp4',
-              codec: 'Video (H.264 + AAC)',
-              sizeText: null
-            });
-          }
-        });
-
-        const thumbs = meta.posters || {};
-        const bestThumb = thumbs['1080'] || thumbs['720'] || thumbs['480'] || thumbs['360'] || '';
-
-        let videoFormats = Array.from(resolutionMap.values()).sort((a, b) => b.resolution - a.resolution);
-        if (videoFormats.length === 0 && hlsStreams.length > 0) {
-          videoFormats = [1080, 720, 480, 360].map(r => ({
-            resolution: r,
-            ext: 'mp4',
-            codec: 'Video (H.264 + AAC)',
-            sizeText: null
-          }));
-        }
-
-        if (videoFormats.length > 0) {
-          return {
-            title: meta.title || `Dailymotion Video (${videoId})`,
-            extractor: 'Dailymotion',
-            uploader: meta.owner?.username || 'Dailymotion',
-            duration: formatDuration(durationSec) || 'Video',
-            thumbnail: bestThumb,
-            resolutions: videoFormats.map(v => v.resolution),
-            videoFormats,
-            audioFormats: [
-              { bitrate: 320, label: '320 kbps', desc: 'MP3 High Bitrate Audio' },
-              { bitrate: 192, label: '192 kbps', desc: 'MP3 Standard Stereo Audio' },
-              { bitrate: 128, label: '128 kbps', desc: 'MP3 Compact Audio' }
-            ],
-            verifiedDirectMap,
-            hlsVariantsByRes: {},
-            hlsStreams,
-            childPages: [],
-            finalPageUrl: targetUrl,
-            cookieHeader: DEFAULT_AGE_COOKIES
-          };
-        }
-      }
-    } catch {}
-  }
-
-  return null;
-}
-
 function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams = []) {
   const cleanedHtml = stripHoverPreviewTags(rawHtml);
   const unpacked = unpackDeanEdwards(cleanedHtml);
@@ -741,26 +446,18 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
 
   const fullText = unescaped + '\n' + urlDecodedExtras;
 
+  // 0. OpenGraph, Twitter Stream & <link rel="preload" as="video">
   const metaStreamRegex = /<meta[^>]+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["'][^>]+content=["']([^"']+)["']/gi;
   let metaMatch;
   while ((metaMatch = metaStreamRegex.exec(fullText)) !== null) {
     const mUrl = resolveAbsoluteUrl(metaMatch[1].trim(), baseUrl);
     if (mUrl && /^https?:\/\//i.test(mUrl) && !/\.(swf|html|php)(\?|$)/i.test(mUrl)) {
       if (/\.m3u8(\?|$)/i.test(mUrl)) hlsStreams.push(mUrl);
-      else if (!directStreams[720]) directStreams[720] = mUrl;
+      else if (!isPreviewOrJunkUrl(mUrl) && !directStreams[720]) directStreams[720] = mUrl;
     }
   }
 
-  const preloadVideoRegex = /<link[^>]+as=["']video["'][^>]+href=["']([^"']+)["']/gi;
-  let plMatch;
-  while ((plMatch = preloadVideoRegex.exec(fullText)) !== null) {
-    const pUrl = resolveAbsoluteUrl(plMatch[1].trim(), baseUrl);
-    if (pUrl && /^https?:\/\//i.test(pUrl)) {
-      if (/\.m3u8(\?|$)/i.test(pUrl)) hlsStreams.push(pUrl);
-      else if (!directStreams[720]) directStreams[720] = pUrl;
-    }
-  }
-
+  // 1. XVideos / XNXX html5player signatures
   const xvHigh = fullText.match(/setVideoUrlHigh\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvLow = fullText.match(/setVideoUrlLow\(\s*['"]([^'"]+)['"]\s*\)/i);
   const xvHls = fullText.match(/setVideoHLS\(\s*['"]([^'"]+)['"]\s*\)/i);
@@ -768,6 +465,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
   if (xvLow?.[1]) directStreams[360] = resolveAbsoluteUrl(xvLow[1], baseUrl);
   if (xvHls?.[1]) hlsStreams.push(resolveAbsoluteUrl(xvHls[1], baseUrl));
 
+  // 2. Pornhub / RedTube / YouPorn / Tube8 mediaDefinitions
   const mediaDefRegex = /"videoUrl"\s*:\s*"([^"]+)"\s*,\s*"quality"\s*:\s*"?(\d{3,4})"?/gi;
   let mdMatch;
   while ((mdMatch = mediaDefRegex.exec(fullText)) !== null) {
@@ -779,6 +477,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
+  // 3. SpankBang stream_data
   ['2160p', '1440p', '1080p', '720p', '480p', '360p', '240p'].forEach(qKey => {
     const sbMatch = fullText.match(new RegExp(`['"]?${qKey}['"]?\\s*:\\s*\\[\\s*['"]([^'"]+)['"]`, 'i'));
     if (sbMatch?.[1]) {
@@ -789,6 +488,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
+  // 4. xHamster, FapHouse & mirror domains window.initials
   const initialsMatch = rawHtml.match(/window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
   if (initialsMatch) {
     try {
@@ -829,6 +529,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     } catch {}
   }
 
+  // 5. KVS (kt_player) flashvars
   const licenseMatch = fullText.match(/license_code\s*:\s*['"]([^'"]+)['"]/i);
   const licenseCode = licenseMatch ? licenseMatch[1] : '';
 
@@ -855,6 +556,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   });
 
+  // 6. <video> and <source> tags
   const html5VideoTagRegex = /<(?:video|source)[^>]+(?:src|data-src|data-video|data-mp4)=["']([^"']+)["'][^>]*>/gi;
   let vMatch;
   while ((vMatch = html5VideoTagRegex.exec(fullText)) !== null) {
@@ -881,6 +583,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
+  // 7. Generic JWPlayer / FluidPlayer / Plyr / VideoJS / JSON-LD contentUrl properties
   const playerPropRegex = /(?:__fileurl|file|video_url|mp4_url|stream_url|contentUrl|hq_video_file|normal_video_file)\s*[:=]\s*['"]((?:https?:)?\/\/[^'"\s<>]+|\/[^'"\s<>]+)['"]/gi;
   let pMatch;
   while ((pMatch = playerPropRegex.exec(fullText)) !== null) {
@@ -898,6 +601,7 @@ function extractStreamsFromHtml(rawHtml, baseUrl, directStreams = {}, hlsStreams
     }
   }
 
+  // 8. Scan for any remaining .m3u8 manifests or direct .mp4 / get_file URLs
   const m3u8Regex = /(?:https?:)?\/\/[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]+)?/gi;
   let hMatch;
   while ((hMatch = m3u8Regex.exec(fullText)) !== null) {
@@ -956,6 +660,222 @@ function findChildMediaPages(html, baseUrl) {
   return [...new Set(candidates)].slice(0, 5);
 }
 
+function findLocalBrowserExecutable() {
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
+          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+        ]
+      : [
+          '/usr/bin/google-chrome',
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium',
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+        ];
+
+  return candidates.find(p => p && fs.existsSync(p)) || null;
+}
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+    srv.on('error', reject);
+  });
+}
+
+// Local Headless Chrome/Edge DevTools (CDP) Network Sniffer for JS-rendered players
+async function inspectViaHeadlessBrowser(targetUrl) {
+  const browserBin = findLocalBrowserExecutable();
+  if (!browserBin) return null;
+
+  let proc = null;
+  const profileDir = path.join(TEMP_DIR, `chrome_prof_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+
+  try {
+    const port = await getFreePort();
+    const args = [
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profileDir}`,
+      '--headless=new',
+      '--disable-gpu',
+      '--mute-audio',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--ignore-certificate-errors',
+      '--autoplay-policy=no-user-gesture-required',
+      '--disable-blink-features=AutomationControlled',
+      `--user-agent=${BROWSER_UA}`,
+      targetUrl
+    ];
+
+    proc = spawn(browserBin, args, { stdio: 'ignore' });
+
+    let wsUrl = null;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await new Promise(r => setTimeout(r, 300));
+      try {
+        const listRes = await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(1000) });
+        if (listRes.ok) {
+          const targets = await listRes.json();
+          const pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
+          if (pageTarget) {
+            wsUrl = pageTarget.webSocketDebuggerUrl;
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    if (!wsUrl || typeof WebSocket === 'undefined') {
+      return null;
+    }
+
+    const capturedDirect = {};
+    const capturedHls = new Set();
+    let domResult = null;
+
+    await new Promise(resolve => {
+      const ws = new WebSocket(wsUrl);
+      let msgId = 1;
+
+      const sendCmd = (method, params = {}) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ id: msgId++, method, params }));
+        }
+      };
+
+      const finish = () => {
+        try { ws.close(); } catch {}
+        resolve();
+      };
+
+      const timeout = setTimeout(finish, 7500);
+
+      ws.addEventListener('open', () => {
+        sendCmd('Network.enable');
+        sendCmd('Page.enable');
+
+        setTimeout(() => {
+          const jsExpr = `(() => {
+            try {
+              document.querySelectorAll('.vjs-big-play-button, .fp-play, .kt-play, [class*="play"], [id*="play"], button').forEach(b => {
+                const txt = (b.innerText || b.className || b.id || '').toLowerCase();
+                if (/play|watch|enter|agree|18|yes|continue/.test(txt)) b.click();
+              });
+              document.querySelectorAll('video').forEach(v => {
+                if (v.clientWidth >= 260 || !v.hasAttribute('data-preview')) {
+                  try { v.play(); } catch {}
+                }
+              });
+            } catch {}
+            const vids = Array.from(document.querySelectorAll('video')).filter(v => {
+              const rect = v.getBoundingClientRect();
+              return (rect.width === 0 || rect.width >= 260) && !v.hasAttribute('data-preview');
+            }).map(v => ({
+              src: v.currentSrc || v.src || v.getAttribute('data-src') || '',
+              label: v.getAttribute('label') || v.getAttribute('title') || ''
+            })).filter(v => v.src);
+            const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src).filter(Boolean);
+            return JSON.stringify({
+              locationHref: window.location.href,
+              title: document.title,
+              cookie: document.cookie,
+              html: document.documentElement.outerHTML.slice(0, 300000),
+              vids,
+              iframes
+            });
+          })()`;
+          sendCmd('Runtime.evaluate', { expression: jsExpr, returnByValue: true });
+        }, 3200);
+      });
+
+      ws.addEventListener('message', event => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.method === 'Network.responseReceived') {
+            const resp = msg.params?.response || {};
+            const respUrl = resp.url || '';
+            const mime = (resp.mimeType || '').toLowerCase();
+            const contentLen = Number(resp.headers?.['content-length'] || resp.headers?.['Content-Length'] || 0);
+
+            if (/^https?:\/\//i.test(respUrl) && !isPreviewOrJunkUrl(respUrl)) {
+              if (mime.includes('mpegurl') || /\.m3u8(\?|$)/i.test(respUrl)) {
+                capturedHls.add(respUrl);
+              } else if (mime.startsWith('video/') && !mime.includes('mp2t')) {
+                if (contentLen === 0 || contentLen >= MIN_VALID_VIDEO_BYTES) {
+                  const resHit = respUrl.match(/[_/-](2160|1440|1080|720|480|360|240|144)p?\b/i);
+                  const r = resHit ? Number(resHit[1]) : 720;
+                  if (!capturedDirect[r]) capturedDirect[r] = respUrl;
+                }
+              }
+            }
+          }
+
+          if (msg.result?.result?.value) {
+            domResult = JSON.parse(msg.result.result.value);
+            setTimeout(() => {
+              clearTimeout(timeout);
+              finish();
+            }, 600);
+          }
+        } catch {}
+      });
+
+      ws.addEventListener('error', () => {
+        clearTimeout(timeout);
+        finish();
+      });
+    });
+
+    const directStreams = { ...capturedDirect };
+    const hlsStreams = [...capturedHls];
+    const finalUrl = domResult?.locationHref || targetUrl;
+
+    if (domResult?.html) {
+      extractStreamsFromHtml(domResult.html, finalUrl, directStreams, hlsStreams);
+    }
+
+    (domResult?.vids || []).forEach(v => {
+      if (!v.src || v.src.startsWith('blob:')) return;
+      const abs = resolveAbsoluteUrl(v.src, finalUrl);
+      if (/\.m3u8(\?|$)/i.test(abs)) {
+        hlsStreams.push(abs);
+      } else if (/^https?:\/\//i.test(abs) && !isPreviewOrJunkUrl(abs)) {
+        const resHit = (v.label || abs).match(/(2160|1440|1080|720|480|360|240|144)/);
+        const r = resHit ? Number(resHit[1]) : 720;
+        directStreams[r] = abs;
+      }
+    });
+
+    return {
+      title: domResult?.title || null,
+      finalUrl,
+      cookieHeader: domResult?.cookie || '',
+      iframes: domResult?.iframes || [],
+      directStreams,
+      hlsStreams: [...new Set(hlsStreams)]
+    };
+  } catch {
+    return null;
+  } finally {
+    if (proc) {
+      try { proc.kill('SIGKILL'); } catch {}
+    }
+    setTimeout(() => {
+      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+    }, 2000);
+  }
+}
+
 async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHeader) {
   const verified = {};
   const entries = Object.entries(directStreams);
@@ -974,16 +894,10 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
             ...(cookieHeader ? { Cookie: cookieHeader } : {})
           },
           redirect: 'follow',
-          signal: AbortSignal.timeout(3500)
+          signal: AbortSignal.timeout(4000)
         });
 
-        if (!probe.ok) {
-          verified[numRes] = {
-            url: streamUrl,
-            filesize: null
-          };
-          return;
-        }
+        if (!probe.ok) return;
 
         const contentType = (probe.headers.get('content-type') || '').toLowerCase();
         const contentRange = probe.headers.get('content-range') || '';
@@ -1007,26 +921,18 @@ async function verifyAndMeasureDirectStreams(directStreams, refererUrl, cookieHe
           url: streamUrl,
           filesize: totalBytes >= MIN_VALID_VIDEO_BYTES ? totalBytes : null
         };
-      } catch {
-        verified[numRes] = {
-          url: streamUrl,
-          filesize: null
-        };
-      }
+      } catch {}
     })
   );
 
   return verified;
 }
 
-async function fetchHtmlWithFallback(targetUrl) {
+async function fetchPageHtml(targetUrl) {
   const parsed = new URL(targetUrl);
   let html = '';
   let cookieHeader = DEFAULT_AGE_COOKIES;
   let finalPageUrl = targetUrl;
-
-  const hasMediaSignatures = (txt) =>
-    Boolean(txt && txt.length > 800 && /<video|<source|video_url|xplayerSettings|window\.initials|setVideoUrl|mediaDefinitions|m3u8|\.mp4|<iframe/i.test(txt));
 
   try {
     const pageRes = await fetch(targetUrl, {
@@ -1038,7 +944,7 @@ async function fetchHtmlWithFallback(targetUrl) {
         'Cookie': DEFAULT_AGE_COOKIES
       },
       redirect: 'follow',
-      signal: AbortSignal.timeout(6500)
+      signal: AbortSignal.timeout(8000)
     });
 
     if (pageRes.url) finalPageUrl = pageRes.url;
@@ -1062,35 +968,10 @@ async function fetchHtmlWithFallback(targetUrl) {
     }
   } catch {}
 
-  if (!hasMediaSignatures(html)) {
-    const proxyUrls = [
-      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
-    ];
-
-    try {
-      const relayHtml = await Promise.any(
-        proxyUrls.map(async (pUrl) => {
-          const r = await fetch(pUrl, {
-            headers: { 'User-Agent': BROWSER_UA },
-            signal: AbortSignal.timeout(6000)
-          });
-          if (!r.ok) throw new Error('Relay status ' + r.status);
-          const text = await r.text();
-          if (!text || text.length < 600) throw new Error('Empty relay response');
-          return text;
-        })
-      );
-      if (relayHtml) {
-        html = relayHtml;
-      }
-    } catch {}
-  }
-
   return { html, cookieHeader, finalPageUrl };
 }
 
+// Tier 1: Inspect via yt-dlp --dump-single-json
 async function inspectViaYtDlp(targetUrl) {
   const parsed = new URL(targetUrl);
   const cleanHost = parsed.hostname.replace(/^www\./, '').toUpperCase();
@@ -1102,8 +983,6 @@ async function inspectViaYtDlp(targetUrl) {
       '--no-warnings',
       '--no-check-certificates',
       '--geo-bypass',
-      '--extractor-args',
-      'youtube:player_client=tv_embedded,ios,web_embedded',
       '--referer',
       parsed.origin + '/',
       '--user-agent',
@@ -1112,7 +991,7 @@ async function inspectViaYtDlp(targetUrl) {
       `Cookie:${DEFAULT_AGE_COOKIES}`,
       targetUrl
     ],
-    20000
+    25000
   );
 
   const info = JSON.parse(rawJson);
@@ -1165,7 +1044,7 @@ async function inspectViaYtDlp(targetUrl) {
       if (f.url && /^https?:\/\//i.test(f.url)) {
         if (/\.m3u8(\?|$)/i.test(f.url) || f.protocol?.includes('m3u8')) {
           hlsStreams.push(f.url);
-        } else {
+        } else if (f.acodec && f.acodec !== 'none') {
           directStreams[res] = { url: f.url, filesize: sizeBytes };
         }
       }
@@ -1226,20 +1105,12 @@ async function inspectViaYtDlp(targetUrl) {
   };
 }
 
-async function scrapePageDeep(targetUrl, providedHtml = '') {
+// Tier 2: Deep HTML + KVS + /embed/<id> + Child Iframe + Headless Chrome Inspector
+async function scrapePageDeep(targetUrl) {
   const parsed = new URL(targetUrl);
   const hostLabel = parsed.hostname.replace(/^www\./, '').toUpperCase();
 
-  let html = providedHtml || '';
-  let cookieHeader = DEFAULT_AGE_COOKIES;
-  let finalPageUrl = targetUrl;
-
-  if (!html) {
-    const fetched = await fetchHtmlWithFallback(targetUrl);
-    html = fetched.html;
-    cookieHeader = fetched.cookieHeader;
-    finalPageUrl = fetched.finalPageUrl;
-  }
+  let { html, cookieHeader, finalPageUrl } = await fetchPageHtml(targetUrl);
 
   const getMeta = prop => {
     const r1 = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i');
@@ -1298,7 +1169,7 @@ async function scrapePageDeep(targetUrl, providedHtml = '') {
   if (Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0 && childPages.length > 0) {
     for (const childUrl of childPages) {
       try {
-        const childFetched = await fetchHtmlWithFallback(childUrl);
+        const childFetched = await fetchPageHtml(childUrl);
         if (childFetched.html) {
           const childDirect = {};
           extractStreamsFromHtml(
@@ -1314,6 +1185,48 @@ async function scrapePageDeep(targetUrl, providedHtml = '') {
           );
           Object.assign(verifiedDirectMap, childVerified);
           if (Object.keys(verifiedDirectMap).length > 0 || hlsStreams.length > 0) break;
+        }
+      } catch {}
+    }
+  }
+
+  // launch Headless Chrome/Edge sniffer if static HTML & child embeds found 0 streams
+  if (Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0) {
+    const headlessData = await inspectViaHeadlessBrowser(targetUrl);
+    if (headlessData) {
+      if (headlessData.title && (!rawTitle || rawTitle.startsWith('Video on'))) {
+        rawTitle = headlessData.title;
+      }
+      if (headlessData.cookieHeader) {
+        cookieHeader += '; ' + headlessData.cookieHeader;
+      }
+      if (headlessData.finalUrl) {
+        finalPageUrl = headlessData.finalUrl;
+      }
+      (headlessData.iframes || []).forEach(iframeUrl => {
+        if (!childPages.includes(iframeUrl)) childPages.push(iframeUrl);
+      });
+      const headlessVerified = await verifyAndMeasureDirectStreams(
+        headlessData.directStreams || {},
+        finalPageUrl,
+        cookieHeader
+      );
+      Object.assign(verifiedDirectMap, headlessVerified);
+      (headlessData.hlsStreams || []).forEach(u => hlsStreams.push(u));
+    }
+  }
+
+  // if child iframe URLs were discovered (e.g. an embedded player), run yt-dlp on the child iframe
+  if (Object.keys(verifiedDirectMap).length === 0 && hlsStreams.length === 0 && childPages.length > 0) {
+    for (const childUrl of childPages.slice(0, 3)) {
+      try {
+        const ytChild = await inspectViaYtDlp(childUrl);
+        if (ytChild && ytChild.videoFormats?.length > 0) {
+          return {
+            ...ytChild,
+            title: rawTitle && !rawTitle.startsWith('Video on') ? rawTitle : ytChild.title,
+            thumbnail: thumbnail || ytChild.thumbnail
+          };
         }
       } catch {}
     }
@@ -1388,9 +1301,9 @@ module.exports = {
   initLocalBinaries,
   getLocalFfmpegPath,
   runYtDlp,
+  runFfmpegDirectMux,
+  downloadDirectStreamToFile,
   parseHlsMasterManifest,
-  streamHlsSegmentsToResponse,
-  resolveViaPublicPlatformApis,
   inspectViaYtDlp,
   scrapePageDeep
 };

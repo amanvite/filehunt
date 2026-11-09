@@ -1,18 +1,8 @@
 const path = require('path');
-const os = require('os');
 const fs = require('fs');
 
-// I check for serverless environment variables so temporary files only write to /tmp on Vercel
-const IS_VERCEL = Boolean(
-  process.env.VERCEL ||
-  process.env.NOW_REGION ||
-  process.env.AWS_LAMBDA_FUNCTION_NAME
-);
 const PORT = Number(process.env.PORT) || 3000;
-
-const TEMP_DIR = IS_VERCEL
-  ? path.join(os.tmpdir(), 'filehunt_temp')
-  : path.join(process.cwd(), 'temp');
+const TEMP_DIR = path.join(process.cwd(), 'temp');
 
 try {
   if (!fs.existsSync(TEMP_DIR)) {
@@ -23,11 +13,11 @@ try {
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-// I send these age-gate bypass cookies so 18+ splash screens never block my scraper
+// universal age-gate bypass cookies so 18+ splash screens never block extraction
 const DEFAULT_AGE_COOKIES =
   'age_verified=1; over18=1; splash=1; disclaimer=1; verified=1; consented=1; kt_tcookie=1; platform=pc; accessAgeDisclaimerPH=1; expiredEnterModalShown=1';
 
-// I enforce a 1.5 MB minimum size on direct MP4 streams so 168 KB hover previews are never mistaken for full videos
+// enforce a 1.5 MB minimum size on direct MP4 streams so 168 KB hover previews are ignored
 const MIN_VALID_VIDEO_BYTES = 1500000;
 
 // standard video resolution tiers
@@ -40,30 +30,30 @@ const BUILTIN_EXTRACTORS = [
   'BuzzFeed', 'Camwhores', 'CBC', 'CBS', 'CloudflareStream', 'CNBC', 'CNN', 'ColliderPorn',
   'ComedyCentral', 'Coub', 'Coursera', 'Crunchyroll', 'DaftSex', 'Dailymotion', 'Deezer',
   'Discovery', 'Douyin', 'Dropbox', 'DeutscheWelle', 'edX', 'Eporner', 'ESPN', 'Euronews',
-  'Facebook', 'Flickr', 'FoxNews', 'FranceTV', 'Freesound', 'GameSpot', 'Giphy', 'GitHub',
-  'GoogleDrive', 'Guardian', 'HClips', 'HotMovs', 'Hotstar', 'HQPorner', 'HuffPost', 'IcePorn',
-  'IGN', 'Imdb', 'Imgur', 'Instagram', 'InternetArchive', 'ITV', 'Ixigua', 'Jamendo', 'JWPlatform',
-  'Kaltura', 'KhanAcademy', 'Kick', 'Kickstarter', 'Kuaishou', 'LastFM', 'LBRY', 'LetsPorn',
-  'LinkedIn', 'Loom', 'MailRu', 'Mastodon', 'Medaltv', 'Medium', 'Metacafe', 'Mixcloud',
-  'Motherless', 'MTV', 'NationalGeographic', 'Naver', 'NBA', 'NBC', 'NDTV', 'NetEaseMusic',
-  'Newgrounds', 'NextCloud', 'NFL', 'NHK', 'Niconico', 'NPR', 'NewYorkTimes', 'Odysee',
-  'Odnoklassniki', 'Panopto', 'Patreon', 'PBS', 'PeerTube', 'Pinterest', 'Pixiv', 'PlutoTV',
-  'Podbean', 'Polygon', 'Pornhat', 'Pornhub', 'Porntrex', 'QQMusic', 'Quora', 'RaiPlay',
-  'RedBullTV', 'Reddit', 'RedGifs', 'RedTube', 'Rule34Video', 'Rumble', 'Rutube', 'SharePoint',
-  'Simplecast', 'SkyNews', 'Slideshare', 'SmugMug', 'Snapchat', 'SonyLIV', 'SoundCloud',
-  'SpankBang', 'Spotify', 'Spreaker', 'Steam', 'Streamable', 'Streamtape', 'Substack', 'SxyPrn',
-  'TED', 'Telegram', 'TencentVideo', 'TheGuardian', 'TheVerge', 'ThisVid', 'Threads', 'TikTok',
-  'TMZ', 'TradingView', 'Triller', 'Trovo', 'Tube8', 'Tubepornclassic', 'Tumblr', 'TuneIn',
-  'Twitch', 'Twitter', 'Txxx', 'Udemy', 'Unity', 'Upornia', 'Ustream', 'Vbox7', 'Vice', 'Vidyard',
-  'Viki', 'Vimeo', 'Vjav', 'VK', 'Vocaroo', 'VoxMedia', 'VoyeurHit', 'WashingtonPost',
-  'WaybackMachine', 'Webex', 'Weibo', 'Wikimedia', 'Wikipedia', 'Wistia', 'WordPress', 'WSJ',
-  'WWE', 'X.com', 'XboxClips', 'XHamster', 'XNXX', 'XVideos', 'Yahoo', 'YandexVideo', 'Youku',
-  'YouPorn', 'YouTube', 'ZDF', 'Zoom'
+  'Facebook', 'Flickr', 'FoxNews', 'FranceTV', 'Freesound', 'FullHindiBFVideos', 'GameSpot',
+  'Giphy', 'GoogleDrive', 'Guardian', 'HClips', 'HotMovs', 'Hotstar', 'HQPorner', 'HuffPost',
+  'IcePorn', 'IGN', 'Imdb', 'Imgur', 'Instagram', 'InternetArchive', 'ITV', 'Ixigua', 'Jamendo',
+  'JWPlatform', 'Kaltura', 'KhanAcademy', 'Kick', 'Kickstarter', 'Kuaishou', 'LastFM', 'LBRY',
+  'LetsPorn', 'LinkedIn', 'Loom', 'MailRu', 'Mastodon', 'Medaltv', 'Medium', 'Metacafe',
+  'Mixcloud', 'Motherless', 'MTV', 'NationalGeographic', 'Naver', 'NBA', 'NBC', 'NDTV',
+  'NetEaseMusic', 'Newgrounds', 'NextCloud', 'NFL', 'NHK', 'Niconico', 'NPR', 'NewYorkTimes',
+  'Odysee', 'Odnoklassniki', 'Panopto', 'Patreon', 'PBS', 'PeerTube', 'Pinterest', 'Pixiv',
+  'PlutoTV', 'Podbean', 'Polygon', 'Pornhat', 'Pornhub', 'Porntrex', 'QQMusic', 'Quora',
+  'RaiPlay', 'RedBullTV', 'Reddit', 'RedGifs', 'RedTube', 'Rule34Video', 'Rumble', 'Rutube',
+  'SharePoint', 'Simplecast', 'SkyNews', 'Slideshare', 'SmugMug', 'Snapchat', 'SonyLIV',
+  'SoundCloud', 'SpankBang', 'Spotify', 'Spreaker', 'Steam', 'Streamable', 'Streamtape',
+  'Substack', 'SxyPrn', 'TED', 'Telegram', 'TencentVideo', 'TheGuardian', 'TheVerge', 'ThisVid',
+  'Threads', 'TikTok', 'TMZ', 'TradingView', 'Triller', 'Trovo', 'Tube8', 'Tubepornclassic',
+  'Tumblr', 'TuneIn', 'Twitch', 'Twitter', 'Txxx', 'Udemy', 'Unity', 'Upornia', 'Ustream',
+  'Vbox7', 'Vice', 'Vidyard', 'Viki', 'Vimeo', 'Vjav', 'VK', 'Vocaroo', 'VoxMedia', 'VoyeurHit',
+  'WashingtonPost', 'WaybackMachine', 'Webex', 'Weibo', 'Wikimedia', 'Wikipedia', 'Wistia',
+  'WordPress', 'WSJ', 'WWE', 'X.com', 'XboxClips', 'XHamster', 'XNXX', 'XVideos', 'Yahoo',
+  'YandexVideo', 'Youku', 'YouPorn', 'YouTube', 'ZDF', 'Zoom'
 ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-// I use this O(1) LRU cache with TTL expiration to keep memory bounded
+// O(1) LRU cache with TTL expiration
 class LruCache {
-  constructor(maxEntries = 200, defaultTtlMs = 5 * 60 * 1000) {
+  constructor(maxEntries = 250, defaultTtlMs = 15 * 60 * 1000) {
     this.maxEntries = maxEntries;
     this.defaultTtlMs = defaultTtlMs;
     this.store = new Map();
@@ -182,7 +172,6 @@ function resolveAbsoluteUrl(maybeRelative, baseUrl) {
 }
 
 module.exports = {
-  IS_VERCEL,
   PORT,
   TEMP_DIR,
   BROWSER_UA,
