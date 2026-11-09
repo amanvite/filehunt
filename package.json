@@ -1,7 +1,7 @@
 {
-  "name": "filehunt",
-  "version": "6.0.0",
-  "description": "FileHunt - Local Universal Video & Audio Downloader",
+  "name": "video-hunt",
+  "version": "7.0.0",
+  "description": "VideoHunt - High-Speed Local Video & Audio Stream Downloader",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

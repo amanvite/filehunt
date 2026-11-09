@@ -11,13 +11,6 @@
     </svg>
   `;
 
-  const SearchIcon = () => html`
-    <svg className="omnibox-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="11" cy="11" r="8"></circle>
-      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-    </svg>
-  `;
-
   const YouTubeIcon = () => html`
     <svg viewBox="0 0 24 24">
       <path d="M21.58 7.19c-.23-.86-.91-1.54-1.77-1.77C18.25 5 12 5 12 5s-6.25 0-7.81.42c-.86.23-1.54.91-1.77 1.77C2 8.75 2 12 2 12s0 3.25.42 4.81c.23.86.91 1.54 1.77 1.77C5.75 19 12 19 12 19s6.25 0 7.81-.42c.86-.23 1.54-.91 1.77-1.77C22 15.25 22 12 22 12s0-3.25-.42-4.81zM10 15V9l5.2 3-5.2 3z" />
@@ -42,7 +35,7 @@
     </svg>
   `;
 
-  // 2. Static Catalog & Legal Clauses
+  // 2. Static Catalog
   const CORE_SITES_DATA = [
     { name: 'youtube.com', label: 'YouTube', icon: YouTubeIcon, color: 'yt', category: 'social' },
     { name: 'instagram.com', label: 'Instagram', icon: InstagramIcon, color: 'ig', category: 'social' },
@@ -54,7 +47,7 @@
     { name: 'reddit.com', label: 'Reddit', badge: 'r/', color: 'orange', category: 'social' },
     { name: 'pinterest.com', label: 'Pinterest', badge: 'P', color: 'red', category: 'social' },
     { name: 'Threads', label: 'Threads', badge: '@', color: 'dark', category: 'social' },
-    { name: 'x.com', label: 'X (Twitter)', badge: 'X', color: 'dark', category: 'social' },
+    { name: 'x.com', label: 'Twitter', badge: 'X', color: 'dark', category: 'social' },
     { name: 'twitch.tv', label: 'Twitch', badge: 'TW', color: 'purple', category: 'social' },
     { name: 'soundcloud.com', label: 'SoundCloud', badge: 'SC', color: 'orange', category: 'social' },
     { name: 'MP4 Converter', label: 'MP4 Converter', badge: 'MP4', color: 'slate', category: 'converter' },
@@ -86,10 +79,21 @@
     };
   }
 
+  // normalize links with or without https:// so youtube.com/watch?v=... works seamlessly
+  function normalizeClientUrl(rawInput) {
+    if (!rawInput) return '';
+    const trimmed = String(rawInput).trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('//')) return `https:${trimmed}`;
+    if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`;
+    return trimmed;
+  }
+
   function detectHostLabel(rawInput) {
-    if (!rawInput || rawInput.trim().length < 8) return null;
+    if (!rawInput || rawInput.trim().length < 4) return null;
     try {
-      const parsed = new URL(rawInput.trim());
+      const parsed = new URL(normalizeClientUrl(rawInput));
+      if (!parsed.hostname.includes('.')) return null;
       const host = parsed.hostname.replace(/^www\./i, '').split('.')[0];
       if (!host) return null;
       return host.slice(0, 12).toUpperCase();
@@ -97,56 +101,6 @@
       return null;
     }
   }
-
-  const TERMS_CLAUSES = [
-    {
-      title: '1. Acceptance of Terms & Binding Agreement',
-      body: 'By accessing, browsing, or submitting any Uniform Resource Locator (URL) to FileHunt ("the Service"), you acknowledge that you have read, understood, and agreed to be legally bound by these Terms of Service. If you do not agree to every provision of these Terms, you are strictly prohibited from accessing or using the Service.'
-    },
-    {
-      title: '2. Strict Prohibition of Copyrighted Materials',
-      body: 'Downloading any copyrighted materials without the express prior written authorization of the copyright owner is strictly prohibited. FileHunt is provided solely for media originally created and owned by you, media distributed under an explicit Creative Commons or Public Domain license, or media for which you hold verifiable written permission.'
-    },
-    {
-      title: '3. Non-Circumvention of DRM & Technical Protection Measures',
-      body: 'FileHunt operates strictly on publicly exposed HTTP/HTTPS metadata and unencrypted public streams. The Service does not decrypt, bypass, strip, or circumvent Digital Rights Management (DRM), paywalls, private authentication gates, or technological protection measures under 17 U.S.C. § 1201 or equivalent statutes.'
-    },
-    {
-      title: '4. User Representations, Warranties & Sole Responsibility',
-      body: 'Every time you submit a URL to FileHunt, you affirmatively represent and warrant under penalty of law that you hold all necessary legal rights to process and download the target resource, that your usage complies with the source site terms, and that you assume 100% of the legal responsibility arising from your actions.'
-    },
-    {
-      title: '5. Passive Technical Intermediary & Safe Harbor Status',
-      body: 'FileHunt is an automated, user-initiated, stateless technical conduit. The developer and operator do not select, initiate, monitor, index, host, cache, or curate any third-party media content. Processing occurs solely at the automated direction of the User under 17 U.S.C. § 512(a) (DMCA Safe Harbor) and Section 79 of the Information Technology Act, 2000 (India).'
-    },
-    {
-      title: '6. Complete Disclaimer of Warranties ("AS IS") & Limitation of Liability',
-      body: 'THE SERVICE IS PROVIDED STRICTLY "AS IS" WITHOUT WARRANTIES OF ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE DEVELOPER, CREATOR, OR HOSTING PROVIDERS OF FILEHUNT BE HELD LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, OR FOR ANY CLAIM OF COPYRIGHT INFRINGEMENT COMMITTED BY ANY USER.'
-    },
-    {
-      title: '7. Indemnification & Hold Harmless Agreement',
-      body: 'You agree to fully indemnify, defend, and hold harmless the developer and operator of FileHunt from and against any and all claims, demands, lawsuits, liabilities, damages, losses, and legal fees arising out of your use or misuse of the Service or your violation of third-party intellectual property rights.'
-    }
-  ];
-
-  const PRIVACY_CLAUSES = [
-    {
-      title: '1. Zero Personal Data Collection',
-      body: 'FileHunt is engineered with a strict privacy-by-design architecture. We do not require user registration, accounts, names, email addresses, phone numbers, or payment details to use the Service.'
-    },
-    {
-      title: '2. Stateless Ephemeral URL Processing (No Past URL History)',
-      body: 'When you paste a link into the search bar, the URL is processed ephemerally in volatile memory solely to inspect public stream metadata. We do not store past links in browser autofill history or retain server logs linking URLs to user IP addresses.'
-    },
-    {
-      title: '3. Automatic Temporary File Purge',
-      body: 'Whenever stream muxing utilizes temporary scratch storage, temporary buffers are automatically and permanently unlinked (fs.unlink) immediately upon completion of the HTTP download stream.'
-    },
-    {
-      title: '4. No Third-Party Ad Trackers or Behavioral Profiling',
-      body: 'FileHunt does not embed third-party advertising networks, cross-site tracking pixels, or behavioral fingerprinting scripts. We never sell, rent, or trade user data with third parties.'
-    }
-  ];
 
   // 3. Custom Media Inspector Hook
   function useMediaInspector() {
@@ -168,7 +122,7 @@
       const params = new URLSearchParams(window.location.search);
       if (params.get('apology')) {
         setApologyText(
-          'We apologize, but FileHunt is unable to extract a downloadable video from that link right now. Please try another video URL.'
+          'We apologize, but VideoHunt is unable to extract a downloadable video from that link right now. Please try another video URL.'
         );
         window.history.replaceState({}, '', '/');
       }
@@ -195,8 +149,8 @@
     }, []);
 
     const inspectUrl = useCallback(async (rawUrl) => {
-      const trimmed = String(rawUrl || '').trim();
-      if (!trimmed) return false;
+      const normalized = normalizeClientUrl(rawUrl);
+      if (!normalized) return false;
 
       abortControllerRef.current?.abort();
       const controller = new AbortController();
@@ -215,7 +169,7 @@
         const res = await fetch('/api/info', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: trimmed }),
+          body: JSON.stringify({ url: normalized }),
           signal: controller.signal
         });
 
@@ -227,19 +181,19 @@
         if (!res.ok || data?.error || !hasStreams) {
           setApologyText(
             data?.error ||
-              'We apologize, but FileHunt could not find any downloadable video streams on this link. Please verify that the URL points directly to a public video.'
+              'We apologize, but VideoHunt could not find any downloadable video streams on this link. Please verify that the URL points directly to a public video.'
           );
           return false;
         }
 
-        setInspectedUrl(trimmed);
+        setInspectedUrl(data.normalizedUrl || normalized);
         setMediaData(data);
         return true;
       } catch (err) {
         if (err.name === 'AbortError') return false;
         setApologyText(
           err.message ||
-            'We apologize, but FileHunt is temporarily unable to reach this video source.'
+            'We apologize, but VideoHunt is temporarily unable to reach this video source.'
         );
         return false;
       } finally {
@@ -274,19 +228,18 @@
   }
 
   // 4. Studio Media Card Component
-  function buildPrepareHref({ url, title, type = 'mp4', resolution = 720, bitrate = 192 }) {
+  function buildDirectDownloadHref({ url, title, type = 'mp4', resolution = 720, bitrate = 192 }) {
     const params = new URLSearchParams({
       url,
       title: title || 'Video',
       type,
       resolution: String(resolution),
-      bitrate: String(bitrate),
-      prepare: '1'
+      bitrate: String(bitrate)
     });
     return `/api/download?${params.toString()}`;
   }
 
-  function InspectorCard({ mediaData, sourceUrl, onDownloadApology }) {
+  function InspectorCard({ mediaData, sourceUrl }) {
     const videoFormats = Array.isArray(mediaData?.videoFormats)
       ? mediaData.videoFormats
       : (mediaData?.resolutions || []).map(r => ({
@@ -306,7 +259,6 @@
 
     const [selectedPreset, setSelectedPreset] = useState(defaultPreset);
     const [thumbFailed, setThumbFailed] = useState(false);
-    const [busyKey, setBusyKey] = useState(null);
 
     useEffect(() => {
       const firstVideo = mediaData?.videoFormats?.[0]?.resolution || mediaData?.resolutions?.[0];
@@ -314,7 +266,6 @@
       if (firstVideo) setSelectedPreset(`mp4:${firstVideo}`);
       else if (firstAudio) setSelectedPreset(`mp3:${firstAudio}`);
       setThumbFailed(false);
-      setBusyKey(null);
     }, [mediaData]);
 
     if (!mediaData || (videoFormats.length === 0 && audioFormats.length === 0)) return null;
@@ -328,41 +279,6 @@
     const proxiedThumb = mediaData.thumbnail
       ? `/api/proxy-image?url=${encodeURIComponent(mediaData.thumbnail)}`
       : '';
-
-    const handleDownloadClick = async (e, paramsObj, keyId) => {
-      e.preventDefault();
-      if (busyKey) return;
-
-      setBusyKey(keyId);
-      onDownloadApology('');
-
-      try {
-        const prepUrl = buildPrepareHref(paramsObj);
-        const res = await fetch(prepUrl);
-        const data = await res.json().catch(() => ({}));
-
-        if (!res.ok || !data.ok || !data.downloadUrl) {
-          onDownloadApology(
-            data.apology ||
-              'We apologize, but FileHunt is unable to extract a downloadable video from this link right now. Please try another link or resolution.'
-          );
-          return;
-        }
-
-        const a = document.createElement('a');
-        a.href = data.downloadUrl;
-        a.download = data.filename || `${mediaData.title || 'video'}.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      } catch {
-        onDownloadApology(
-          'We apologize, but FileHunt could not complete the download for this video right now.'
-        );
-      } finally {
-        setBusyKey(null);
-      }
-    };
 
     return html`
       <div className="inspector-card">
@@ -419,12 +335,11 @@
               </select>
 
               <a
-                href="#download"
+                href=${buildDirectDownloadHref(primaryParams)}
                 className="btn-download-main"
-                style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
-                onClick=${e => handleDownloadClick(e, primaryParams, 'primary')}
+                download
               >
-                ${busyKey === 'primary' ? 'Preparing File...' : 'Download Now'}
+                Download Now
               </a>
             </div>
           </div>
@@ -461,12 +376,11 @@
                 </div>
 
                 <a
-                  href="#download"
+                  href=${buildDirectDownloadHref(rowParams)}
                   className="table-dl-btn"
-                  style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
-                  onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
+                  download
                 >
-                  ${busyKey === rowKey ? 'Downloading...' : `Download ${res}p MP4`}
+                  Download ${res}p MP4
                 </a>
               </div>
             `;
@@ -492,12 +406,11 @@
                   </div>
 
                   <a
-                    href="#download"
+                    href=${buildDirectDownloadHref(rowParams)}
                     className="table-dl-btn audio-dl-btn"
-                    style=${{ opacity: busyKey ? 0.65 : 1, pointerEvents: busyKey ? 'none' : 'auto' }}
-                    onClick=${e => handleDownloadClick(e, rowParams, rowKey)}
+                    download
                   >
-                    ${busyKey === rowKey ? 'Converting...' : 'Download MP3'}
+                    Download MP3
                   </a>
                 </div>
               `;
@@ -508,50 +421,28 @@
     `;
   }
 
-  // 5. Sites Directory View (Strict Alphabetical A-Z + Letter Jump Filter)
-  const ALPHA_FILTERS = ['ALL', '0-9', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
-
-  function SitesView({ sitesCatalog, onSelectSite }) {
-    const [searchQuery, setSearchQuery] = useState('');
+  // 5. Sites Directory View
+  function SitesView({ sitesCatalog, onSelectSite, onBackHome }) {
     const [selectedCategory, setSelectedCategory] = useState('all');
-    const [selectedLetter, setSelectedLetter] = useState('ALL');
 
     const filteredSites = useMemo(() => {
-      const q = searchQuery.trim().toLowerCase();
       return sitesCatalog
-        .filter(item => {
-          const catOk = selectedCategory === 'all' || item.category === selectedCategory;
-          const queryOk = !q || item.name.toLowerCase().includes(q) || item.label.toLowerCase().includes(q);
-          if (!catOk || !queryOk) return false;
-
-          if (selectedLetter === 'ALL') return true;
-          const firstChar = item.name.charAt(0).toUpperCase();
-          if (selectedLetter === '0-9') return /^[0-9]/.test(firstChar);
-          return firstChar === selectedLetter;
-        })
+        .filter(item => selectedCategory === 'all' || item.category === selectedCategory)
         .sort((a, b) =>
           a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
         );
-    }, [sitesCatalog, searchQuery, selectedCategory, selectedLetter]);
+    }, [sitesCatalog, selectedCategory]);
 
     return html`
       <div>
-        <div className="search-box-wrap">
-          <div className="google-omnibox">
-            <${SearchIcon} />
-            <input
-              type="text"
-              className="omnibox-input"
-              value=${searchQuery}
-              onChange=${e => setSearchQuery(e.target.value)}
-              placeholder="Search supported sites or converters (e.g. YouTube, IcePorn, Eporner, XHamster, Vimeo)..."
-              autoComplete="off"
-              spellCheck="false"
-            />
-          </div>
-        </div>
-
         <div className="category-filter-bar">
+          <button
+            type="button"
+            className="cat-filter-pill"
+            onClick=${onBackHome}
+          >
+            ← Back to Downloader
+          </button>
           ${[
             { id: 'all', label: 'All Resources' },
             { id: 'social', label: 'Social & Video' },
@@ -569,22 +460,9 @@
           `)}
         </div>
 
-        <div className="alpha-jump-bar">
-          ${ALPHA_FILTERS.map(letter => html`
-            <button
-              key=${letter}
-              type="button"
-              className=${`alpha-jump-btn ${selectedLetter === letter ? 'active' : ''}`}
-              onClick=${() => setSelectedLetter(letter)}
-            >
-              ${letter}
-            </button>
-          `)}
-        </div>
-
         <div className="sites-section">
           <div className="sites-section-header">
-            <span className="sites-section-title">All resources (A–Z)</span>
+            <span className="sites-section-title">Supported Sites & Converters (A–Z)</span>
             <span className="sites-count-badge">${filteredSites.length} resources</span>
           </div>
 
@@ -613,26 +491,7 @@
     `;
   }
 
-  // 6. Legal Document View
-  function LegalView({ metaLeft, metaRight, clauses }) {
-    return html`
-      <div className="legal-doc-wrapper">
-        <div className="legal-meta-banner">
-          <span>${metaLeft}</span>
-          <span>${metaRight}</span>
-        </div>
-
-        ${clauses.map(clause => html`
-          <div key=${clause.title} className="legal-clause-card">
-            <h3>${clause.title}</h3>
-            <p>${clause.body}</p>
-          </div>
-        `)}
-      </div>
-    `;
-  }
-
-  // 7. Root Application Component
+  // 6. Root Application Component
   function App() {
     const [activeView, setActiveView] = useState('home');
     const [selectedSite, setSelectedSite] = useState(null);
@@ -644,7 +503,6 @@
       isLoading,
       loadingStage,
       apologyText,
-      setApologyText,
       mediaData,
       inspectedUrl,
       sitesCatalog,
@@ -700,7 +558,7 @@
             <span className="brand-glyph">
               <${BrandDownloadIcon} />
             </span>
-            <span className="brand-name">FileHunt</span>
+            <span className="brand-name">VideoHunt</span>
           </a>
         </div>
         <h1 className="page-subtitle">${subtitle}</h1>
@@ -719,7 +577,6 @@
 
               <div className="search-box-wrap">
                 <form className="google-omnibox" onSubmit=${handleFormSubmit} autoComplete="off" noValidate>
-                  <${SearchIcon} />
                   ${detectedHost && html`
                     <span className="detected-host-tag">${detectedHost}</span>
                   `}
@@ -727,13 +584,13 @@
                     ref=${inputRef}
                     type="text"
                     inputMode="url"
-                    name="fh_stream_target_field"
+                    name="vh_stream_target_field"
                     className="omnibox-input"
                     value=${urlInput}
                     readOnly=${!inputUnlocked}
                     onFocus=${() => setInputUnlocked(true)}
                     onChange=${e => setUrlInput(e.target.value)}
-                    placeholder=${selectedSite ? `Paste your ${selectedSite} link here` : 'Paste your video link here'}
+                    placeholder=${selectedSite ? `Paste your ${selectedSite} link here` : 'Paste your video link here (e.g. youtube.com/watch?v=...)'}
                     autoComplete="off"
                     autoCorrect="off"
                     autoCapitalize="off"
@@ -753,13 +610,13 @@
                     </button>
                   `}
                   <button type="submit" className="omnibox-submit-btn" disabled=${isLoading}>
-                    ${isLoading ? 'Inspecting...' : 'Download'}
+                    ${isLoading ? 'Searching...' : 'Search'}
                   </button>
                 </form>
 
-                <p className="prohibition-notice">
-                  Downloading any copyrighted materials is strictly prohibited, please read our${' '}
-                  <a onClick=${() => switchView('terms')}>Terms of Service</a>.
+                <p className="supported-sites-notice">
+                  Supports high-speed media extraction across YouTube, Instagram, X, TikTok, Vimeo, Dailymotion, and${' '}
+                  <a onClick=${() => switchView('sites')}>170+ supported platforms</a>.
                 </p>
               </div>
 
@@ -781,15 +638,14 @@
                 <${InspectorCard}
                   mediaData=${mediaData}
                   sourceUrl=${inspectedUrl}
-                  onDownloadApology=${msg => setApologyText(msg)}
                 />
               `}
 
               <div className="highlights-bento">
                 <div className="highlight-card">
-                  <span className="highlight-card-badge">REAL QUALITIES</span>
-                  <h3>True Stream Verification</h3>
-                  <p>Inspects every video link in real time to display only the genuine resolutions and file sizes available.</p>
+                  <span className="highlight-card-badge">INSTANT STREAM</span>
+                  <h3>Zero-Wait Browser Download</h3>
+                  <p>Streams directly into your browser's download manager from the first millisecond with continuous packet flushing.</p>
                 </div>
                 <div className="highlight-card">
                   <span className="highlight-card-badge">H.264 + MP3</span>
@@ -797,18 +653,18 @@
                   <p>Delivers progressive H.264 MP4 video and 320kbps MP3 audio compatible with Windows, Mac, iOS, and Android.</p>
                 </div>
                 <div className="highlight-card">
-                  <span className="highlight-card-badge">LOCAL ENGINE</span>
-                  <h3>Direct FFmpeg + yt-dlp Muxing</h3>
-                  <p>Merges high-definition video and audio tracks locally on your machine with zero cloud payload limits.</p>
+                  <span className="highlight-card-badge">REAL QUALITIES</span>
+                  <h3>True Stream Verification</h3>
+                  <p>Inspects every video link in real time to display only the genuine resolutions and file sizes available.</p>
                 </div>
               </div>
 
               <div className="seo-description-block">
                 <p>
-                  Want to save your favorite videos for offline viewing? Our powerful ${selectedSite || 'online'} video downloader provides exactly what you're looking for. Get high-quality downloads with rapid processing through a simple and intuitive interface. Our free ${selectedSite || 'FileHunt'} downloader offers ultimate convenience for every user.
+                  Want to save your favorite videos for offline viewing? Our powerful ${selectedSite || 'online'} video downloader provides exactly what you're looking for. Get high-quality downloads with rapid processing through a simple and intuitive interface. Our free ${selectedSite || 'VideoHunt'} downloader offers ultimate convenience for every user.
                 </p>
                 <p>
-                  Need a dependable ${selectedSite || 'video'} downloader? You've discovered the ideal solution. Our optimized video downloader lets you save authorized, public-domain, and creator-owned videos straight to your device with complete convenience and reliable performance. Choose our top-rated ${selectedSite || 'FileHunt'} downloader for professional-quality results each time.
+                  Need a dependable ${selectedSite || 'video'} downloader? You've discovered the ideal solution. Our optimized video downloader lets you save authorized, public-domain, and creator-owned videos straight to your device with complete convenience and reliable performance. Choose our top-rated ${selectedSite || 'VideoHunt'} downloader for professional-quality results each time.
                 </p>
               </div>
             </section>
@@ -817,28 +673,10 @@
           ${activeView === 'sites' && html`
             <section className="view-panel active">
               <${BrandHeader} subtitle="Supported Sites & Format Converters" />
-              <${SitesView} sitesCatalog=${sitesCatalog} onSelectSite=${handleSelectSite} />
-            </section>
-          `}
-
-          ${activeView === 'terms' && html`
-            <section className="view-panel active">
-              <${BrandHeader} subtitle="Terms of Service & Legal Disclaimer" />
-              <${LegalView}
-                metaLeft="Document: Binding Terms of Service & Liability Waiver"
-                metaRight="Effective Date: November 2026"
-                clauses=${TERMS_CLAUSES}
-              />
-            </section>
-          `}
-
-          ${activeView === 'privacy' && html`
-            <section className="view-panel active">
-              <${BrandHeader} subtitle="Privacy Policy & Data Handling" />
-              <${LegalView}
-                metaLeft="Architecture: Stateless Zero-Log Processing"
-                metaRight="Compliance: DPDP Act (India) • GDPR • CCPA"
-                clauses=${PRIVACY_CLAUSES}
+              <${SitesView}
+                sitesCatalog=${sitesCatalog}
+                onSelectSite=${handleSelectSite}
+                onBackHome=${() => switchView('home')}
               />
             </section>
           `}
@@ -847,39 +685,13 @@
 
         <footer className="app-footer">
           <div className="footer-short-divider"></div>
-          <nav className="footer-nav-links">
-            <a
-              className=${activeView === 'home' ? 'active-link' : ''}
-              onClick=${() => switchView('home')}
-            >
-              Home
-            </a>
-            <a
-              className=${activeView === 'sites' ? 'active-link' : ''}
-              onClick=${() => switchView('sites')}
-            >
-              Sites
-            </a>
-            <a
-              className=${activeView === 'terms' ? 'active-link' : ''}
-              onClick=${() => switchView('terms')}
-            >
-              Terms of Service
-            </a>
-            <a
-              className=${activeView === 'privacy' ? 'active-link' : ''}
-              onClick=${() => switchView('privacy')}
-            >
-              Privacy Policy
-            </a>
-          </nav>
-          <div className="footer-copyright">© 2026 FileHunt. All rights reserved.</div>
+          <div className="footer-copyright">© 2026 VideoHunt. All rights reserved.</div>
         </footer>
       </div>
     `;
   }
 
-  // 8. Mount Application
+  // 7. Mount Application
   const container = document.getElementById('root');
   if (container) {
     const root = window.ReactDOM.createRoot(container);

@@ -8,16 +8,20 @@ process.emitWarning = function (warning, ...args) {
 };
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+// prevent any unexpected stream or socket abort from stopping the local server
+process.on('uncaughtException', err => {
+  console.error('[VideoHunt Recoverable Exception]:', err?.message || err);
+});
+
+process.on('unhandledRejection', reason => {
+  console.error('[VideoHunt Recoverable Rejection]:', reason?.message || reason);
+});
+
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
-const { PORT, BROWSER_UA, BUILTIN_EXTRACTORS } = require('./src/config');
+const { PORT, BROWSER_UA, BUILTIN_EXTRACTORS, normalizeInputUrl } = require('./src/config');
 const { initLocalBinaries } = require('./src/extractor');
-const {
-  inspectMediaUrl,
-  prepareMediaDownload,
-  consumePreparedToken
-} = require('./src/downloader');
+const { inspectMediaUrl, streamMediaToResponse } = require('./src/downloader');
 
 const app = express();
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -37,7 +41,8 @@ app.use(express.static(PUBLIC_DIR));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '6.0.0',
+    name: 'VideoHunt',
+    version: '8.5.0',
     runtime: 'local-node'
   });
 });
@@ -47,13 +52,13 @@ app.get('/api/extractors', (req, res) => {
   res.json({ extractors: BUILTIN_EXTRACTORS });
 });
 
-// GET /api/proxy-image - proxies thumbnails with Referer so hotlink protection never breaks preview images
+// GET /api/proxy-image - proxies thumbnails with Referer so hotlink rules never break artwork
 app.get('/api/proxy-image', async (req, res) => {
   const { url } = req.query || {};
   if (!url) return res.status(400).end();
 
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(normalizeInputUrl(url));
     let imgRes = await fetch(parsed.href, {
       headers: {
         'User-Agent': BROWSER_UA,
@@ -80,23 +85,25 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
-// POST /api/info - inspects the video URL and returns only the real qualities available for that video
+// POST /api/info - accepts links with or without http:// or https://
 app.post('/api/info', async (req, res) => {
   const { url } = req.body || {};
-  if (!url) {
-    return res.status(400).json({ error: 'Please paste a valid video link.' });
+  if (!url || !String(url).trim()) {
+    return res.status(400).json({ error: 'Please paste a video link.' });
   }
 
+  let normalizedUrl;
   try {
-    new URL(url.trim());
+    normalizedUrl = normalizeInputUrl(url);
   } catch {
-    return res.status(400).json({ error: 'Invalid link format. Make sure it starts with https://' });
+    return res.status(400).json({ error: 'Please enter a valid website link (e.g. youtube.com/watch?v=...).' });
   }
 
   try {
-    const info = await inspectMediaUrl(url.trim());
+    const info = await inspectMediaUrl(normalizedUrl);
     if (info && info.videoFormats?.length > 0) {
       return res.json({
+        normalizedUrl,
         title: info.title,
         extractor: info.extractor,
         uploader: info.uploader || null,
@@ -113,52 +120,27 @@ app.post('/api/info', async (req, res) => {
 
   return res.status(422).json({
     error:
-      'We apologize, but FileHunt could not find any downloadable video streams on this link. Please verify that the URL points directly to a public video.'
+      'We apologize, but VideoHunt could not find any downloadable video streams on this link. Please verify that the URL points directly to a public video.'
   });
 });
 
-// GET /api/download - prepares the video locally into temp/ and triggers a native browser file save
+// GET /api/download - streams directly to Chrome's download manager with continuous packet flushing
 app.get('/api/download', async (req, res) => {
-  const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192', prepare, token } = req.query || {};
-
-  if (token) {
-    const entry = consumePreparedToken(token);
-    if (!entry || !entry.filePath || !fs.existsSync(entry.filePath)) {
-      return res.redirect('/?apology=1');
-    }
-
-    return res.download(entry.filePath, entry.filename, () => {
-      fs.unlink(entry.filePath, () => {});
-    });
-  }
-
+  const { url, title = 'Video', type = 'mp4', resolution = '720', bitrate = '192' } = req.query || {};
   if (!url) {
-    if (prepare === '1') return res.status(400).json({ ok: false });
     return res.redirect('/?apology=1');
   }
 
-  const result = await prepareMediaDownload({ url, title, type, resolution, bitrate });
-
-  if (prepare === '1') {
-    if (result.ok) {
-      return res.json({
-        ok: true,
-        downloadUrl: `/api/download?token=${encodeURIComponent(result.token)}`,
-        filename: result.filename
-      });
+  try {
+    const normalizedUrl = normalizeInputUrl(url);
+    await streamMediaToResponse({ url: normalizedUrl, title, type, resolution, bitrate, req, res });
+  } catch (err) {
+    console.error('[Download Stream Error]:', err.message);
+    if (!res.headersSent) {
+      return res.redirect('/?apology=1');
     }
-    return res.status(422).json({
-      ok: false,
-      apology:
-        'We apologize, but FileHunt is unable to extract a downloadable video from this link right now. Please verify that the page contains a public video and try again.'
-    });
+    try { res.end(); } catch {}
   }
-
-  if (result.ok) {
-    return res.redirect(`/api/download?token=${encodeURIComponent(result.token)}`);
-  }
-
-  return res.redirect('/?apology=1');
 });
 
 // SPA fallback
@@ -168,6 +150,10 @@ app.use((req, res) => {
 
 initLocalBinaries();
 
-app.listen(PORT, () => {
-  console.log(`FileHunt Local v6.0 running at http://localhost:${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`VideoHunt v8.5 running at http://localhost:${PORT}`);
 });
+
+server.timeout = 0;
+server.keepAliveTimeout = 0;
+server.headersTimeout = 0;

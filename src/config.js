@@ -13,17 +13,13 @@ try {
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-// universal age-gate bypass cookies so 18+ splash screens never block extraction
 const DEFAULT_AGE_COOKIES =
   'age_verified=1; over18=1; splash=1; disclaimer=1; verified=1; consented=1; kt_tcookie=1; platform=pc; accessAgeDisclaimerPH=1; expiredEnterModalShown=1';
 
-// enforce a 1.5 MB minimum size on direct MP4 streams so 168 KB hover previews are ignored
 const MIN_VALID_VIDEO_BYTES = 1500000;
 
-// standard video resolution tiers
 const STANDARD_HEIGHTS = [2160, 1440, 1080, 720, 480, 360, 240, 144];
 
-// canonical A-Z list of supported sites
 const BUILTIN_EXTRACTORS = [
   '1News', '9GAG', 'Abebony', 'ABC', 'AcademicEarth', 'AcFun', 'Archive.org', 'ARD', 'ArteTV',
   'Audiomack', 'Bandcamp', 'BBC', 'Beeg', 'Behance', 'Bilibili', 'BitChute', 'Bloomberg', 'Bluesky',
@@ -47,13 +43,12 @@ const BUILTIN_EXTRACTORS = [
   'Tumblr', 'TuneIn', 'Twitch', 'Twitter', 'Txxx', 'Udemy', 'Unity', 'Upornia', 'Ustream',
   'Vbox7', 'Vice', 'Vidyard', 'Viki', 'Vimeo', 'Vjav', 'VK', 'Vocaroo', 'VoxMedia', 'VoyeurHit',
   'WashingtonPost', 'WaybackMachine', 'Webex', 'Weibo', 'Wikimedia', 'Wikipedia', 'Wistia',
-  'WordPress', 'WSJ', 'WWE', 'X.com', 'XboxClips', 'XHamster', 'XNXX', 'XVideos', 'Yahoo',
-  'YandexVideo', 'Youku', 'YouPorn', 'YouTube', 'ZDF', 'Zoom'
+  'WordPress', 'WSJ', 'WWE', 'X.com', 'XboxClips', 'XHamster', 'XHAccess', 'XNXX', 'XVideos',
+  'Yahoo', 'YandexVideo', 'Youku', 'YouPorn', 'YouTube', 'ZDF', 'Zoom'
 ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-// O(1) LRU cache with TTL expiration
 class LruCache {
-  constructor(maxEntries = 250, defaultTtlMs = 15 * 60 * 1000) {
+  constructor(maxEntries = 300, defaultTtlMs = 30 * 60 * 1000) {
     this.maxEntries = maxEntries;
     this.defaultTtlMs = defaultTtlMs;
     this.store = new Map();
@@ -86,6 +81,24 @@ class LruCache {
   }
 }
 
+// automatically prepend https:// if the user pastes a domain link without http:// or https://
+function normalizeInputUrl(rawInput) {
+  if (!rawInput) return '';
+  let trimmed = String(rawInput).trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+  if (!/^https?:\/\//i.test(trimmed)) {
+    trimmed = `https://${trimmed}`;
+  }
+  const parsed = new URL(trimmed);
+  if (!parsed.hostname || !parsed.hostname.includes('.')) {
+    throw new Error('Invalid hostname');
+  }
+  return parsed.href;
+}
+
 function snapToStandardResolution(rawHeight) {
   const n = Number(rawHeight);
   if (!n || isNaN(n) || n < 120) return null;
@@ -111,15 +124,34 @@ function formatDuration(sec) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+const NAMED_ENTITIES = {
+  amp: '&',
+  quot: '"',
+  apos: "'",
+  lt: '<',
+  gt: '>',
+  excl: '!',
+  nbsp: ' ',
+  ndash: '-',
+  mdash: '-',
+  lsquo: "'",
+  rsquo: "'",
+  ldquo: '"',
+  rdquo: '"',
+  hellip: '...',
+  copy: '(c)',
+  reg: '(r)'
+};
+
 function decodeHtmlEntities(str) {
   if (!str) return '';
   return String(str)
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#039;|&apos;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&([a-zA-Z0-9]+);/g, (full, name) => {
+      const lower = name.toLowerCase();
+      return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, lower) ? NAMED_ENTITIES[lower] : '';
+    })
     .trim();
 }
 
@@ -180,6 +212,7 @@ module.exports = {
   STANDARD_HEIGHTS,
   BUILTIN_EXTRACTORS,
   LruCache,
+  normalizeInputUrl,
   snapToStandardResolution,
   formatBytes,
   formatDuration,
